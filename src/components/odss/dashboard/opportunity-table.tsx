@@ -13,12 +13,12 @@ export function OpportunityTable({ onSelect }: { onSelect?: (rec: Recommendation
   const recs = topRecommendations;
 
   return (
-    <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+    <Card className="accent-warn border-border/50 bg-card/50 backdrop-blur-sm">
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center justify-between text-sm">
           <span className="flex items-center gap-2 font-mono tracking-wide text-muted-foreground">
             <Trophy className="h-4 w-4 text-warn" />
-            <span className="text-foreground">TOP OPPORTUNITIES</span>
+            <span className="text-gradient-warn text-base font-bold">TOP OPPORTUNITIES</span>
           </span>
           <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
             {recs.length} RANKED
@@ -54,7 +54,7 @@ export function OpportunityTable({ onSelect }: { onSelect?: (rec: Recommendation
                   </td>
                 </tr>
               )}
-              {recs.map((r) => {
+              {recs.map((r, idx) => {
                 const q = liveQuotes[r.symbol];
                 const conf = r.opportunity.confidence;
                 const score = r.opportunity.totalScore;
@@ -62,14 +62,17 @@ export function OpportunityTable({ onSelect }: { onSelect?: (rec: Recommendation
                   conf > 65 ? 'text-bull text-glow-bull' : conf > 45 ? 'text-warn' : 'text-bear';
                 const scoreBg =
                   score >= 70
-                    ? 'bg-bull/15 text-bull'
+                    ? 'bg-gradient-to-br from-bull/25 to-bull/10 text-bull border border-bull/30'
                     : score >= 55
-                      ? 'bg-warn/15 text-warn'
-                      : 'bg-bear/15 text-bear';
+                      ? 'bg-gradient-to-br from-warn/25 to-warn/10 text-warn border border-warn/30'
+                      : 'bg-gradient-to-br from-bear/25 to-bear/10 text-bear border border-bear/30';
                 return (
                   <tr
                     key={r.symbol}
-                    className="cursor-pointer border-b border-border/30 transition-colors hover:bg-bull/5"
+                    className={cn(
+                      'cursor-pointer border-b border-border/30 transition-all hover:bg-info/10',
+                      idx % 2 === 0 ? 'bg-card/20' : 'bg-transparent'
+                    )}
                     onClick={() => onSelect?.(r)}
                   >
                     <td className="px-2 py-1.5 text-muted-foreground">{r.opportunity.rank}</td>

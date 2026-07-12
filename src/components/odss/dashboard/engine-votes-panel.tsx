@@ -16,8 +16,8 @@ export function EngineVotesPanel({ rec }: { rec?: Recommendation }) {
       <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 font-mono text-sm tracking-wide text-muted-foreground">
-            <Vote className="h-4 w-4 text-info" />
-            <span className="text-foreground">ENGINE VOTES</span>
+            <Vote className="h-4 w-4 text-ai" />
+            <span className="text-gradient-ai text-base font-bold">ENGINE VOTES</span>
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -31,12 +31,12 @@ export function EngineVotesPanel({ rec }: { rec?: Recommendation }) {
   const totalWeight = votes.reduce((a, b) => a + b.weight, 0);
 
   return (
-    <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+    <Card className="accent-ai border-border/50 bg-card/50 backdrop-blur-sm">
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center justify-between text-sm">
           <span className="flex items-center gap-2 font-mono tracking-wide text-muted-foreground">
-            <Vote className="h-4 w-4 text-info" />
-            <span className="text-foreground">ENGINE VOTES</span>
+            <Vote className="h-4 w-4 text-ai" />
+            <span className="text-gradient-ai text-base font-bold">ENGINE VOTES</span>
           </span>
           <span className="font-mono text-[10px] uppercase tracking-widest text-bull">
             {r.symbol}

@@ -67,7 +67,7 @@ export default function ODSSPage() {
   return (
     <div className="flex min-h-screen flex-col">
       {/* ============================= HEADER ============================= */}
-      <header className="sticky top-0 z-30 border-b border-border/60 bg-[#0a0e14]/85 backdrop-blur-xl">
+      <header className="sticky top-0 z-30 border-b border-border/60 bg-gradient-to-r from-bull/5 via-transparent to-ai/5 bg-[#0a0e14]/85 backdrop-blur-xl">
         <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-4 px-4 py-2">
           {/* Brand */}
           <div className="flex items-center gap-3">
@@ -76,8 +76,8 @@ export default function ODSSPage() {
               <div className="pointer-events-none absolute inset-0 bg-gradient-to-tr from-transparent via-white/5 to-white/10" />
             </div>
             <div className="leading-tight">
-              <h1 className="text-sm font-bold tracking-tight text-foreground">
-                ODSS
+              <h1 className="text-sm font-bold tracking-tight">
+                <span className="text-gradient-bull">ODSS</span>
                 <span className="ml-1.5 font-normal text-muted-foreground">
                   · Options Decision Support System
                 </span>
@@ -142,6 +142,9 @@ export default function ODSSPage() {
           </div>
         </div>
       </header>
+
+      {/* Colorful accent bar */}
+      <div className="rainbow-bar h-0.5 w-full" />
 
       {/* ============================= TICKER TAPE ============================= */}
       <TickerTape />

@@ -16,12 +16,12 @@ export function DecisionLog() {
   const { decisionLog } = useODSS();
 
   return (
-    <Card className="border-border/50 bg-[#080b11]/70 backdrop-blur-sm">
+    <Card className="accent-info border-border/50 bg-[#080b11]/70 backdrop-blur-sm">
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center justify-between text-sm">
           <span className="flex items-center gap-2 font-mono tracking-wide text-muted-foreground">
             <Terminal className="h-4 w-4 text-info" />
-            <span className="text-foreground">DECISION TAPE</span>
+            <span className="text-gradient-bull text-base font-bold">DECISION TAPE</span>
           </span>
           <span className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-bull">
             <span className="live-dot h-1.5 w-1.5 rounded-full bg-bull" />

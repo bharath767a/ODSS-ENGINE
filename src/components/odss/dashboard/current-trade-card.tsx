@@ -15,11 +15,11 @@ export function CurrentTradeCard() {
   if (!activeTrade) {
     const topEnter = topRecommendations.find((r) => r.decision.decision === 'ENTER');
     return (
-      <Card className="border-dashed border-border/60 bg-card/40 backdrop-blur-sm">
+      <Card className="border-dashed border-border/60 bg-card/40 backdrop-blur-sm accent-info">
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center gap-2 font-mono text-sm tracking-wide text-muted-foreground">
             <Activity className="h-4 w-4 text-info" />
-            <span className="text-foreground">ACTIVE TRADE</span>
+            <span className="text-gradient-bull text-base font-bold">ACTIVE TRADE</span>
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -82,7 +82,7 @@ export function CurrentTradeCard() {
         <CardTitle className="flex items-center justify-between text-sm">
           <span className="flex items-center gap-2 font-mono tracking-wide text-muted-foreground">
             <Activity className="h-4 w-4 text-info" />
-            <span className="text-foreground">ACTIVE TRADE</span>
+            <span className={cn('text-base font-bold', pnlPositive ? 'text-gradient-bull' : 'text-gradient-bear')}>ACTIVE TRADE</span>
           </span>
           <StateBadge state={t.state} />
         </CardTitle>

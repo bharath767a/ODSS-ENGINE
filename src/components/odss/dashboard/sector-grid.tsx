@@ -32,12 +32,12 @@ export function SectorGrid() {
   }
 
   return (
-    <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+    <Card className="accent-bull border-border/50 bg-card/50 backdrop-blur-sm">
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center justify-between text-sm">
           <span className="flex items-center gap-2 font-mono tracking-wide text-muted-foreground">
-            <Layers className="h-4 w-4 text-info" />
-            <span className="text-foreground">SECTOR HEATMAP</span>
+            <Layers className="h-4 w-4 text-bull" />
+            <span className="text-gradient-bull text-base font-bold">SECTOR HEATMAP</span>
           </span>
           <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
             {list.length} SECTORS

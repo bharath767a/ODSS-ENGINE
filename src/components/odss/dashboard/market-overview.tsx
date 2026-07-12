@@ -18,14 +18,15 @@ export function MarketOverview() {
 
   const vixHigh = vix >= 18;
   const vixExtreme = vix >= 22;
+  const breadthBullish = (breadth?.advanceDeclineRatio ?? 1) >= 1;
 
   return (
-    <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+    <Card className="accent-info border-border/50 bg-card/50 backdrop-blur-sm">
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center justify-between text-sm">
           <span className="flex items-center gap-2 font-mono tracking-wide text-muted-foreground">
             <Gauge className="h-4 w-4 text-info" />
-            <span className="text-foreground">MARKET ENGINE</span>
+            <span className="text-gradient-bull text-base font-bold">MARKET ENGINE</span>
           </span>
           {market && <ConfidenceMeter value={market.marketConfidence} />}
         </CardTitle>
@@ -51,9 +52,12 @@ export function MarketOverview() {
         <div className="grid grid-cols-2 gap-2">
           <div
             className={cn(
-              'rounded-lg border border-border/50 bg-muted/30 p-2 transition-all',
-              vixExtreme && 'border-bear/40 bg-bear/10 glow-warn',
-              vixHigh && !vixExtreme && 'border-warn/40 bg-warn/10'
+              'rounded-lg p-2 transition-all',
+              vixExtreme
+                ? 'tile-bear glow-warn'
+                : vixHigh
+                  ? 'tile-warn'
+                  : 'tile-info'
             )}
           >
             <div className="flex items-center justify-between">
@@ -69,13 +73,13 @@ export function MarketOverview() {
                   ? 'text-bear text-glow-bear'
                   : vixHigh
                     ? 'text-warn text-glow-warn'
-                    : 'text-foreground'
+                    : 'text-info'
               )}
             >
               {vix.toFixed(2)}
             </div>
           </div>
-          <div className="rounded-lg border border-border/50 bg-muted/30 p-2">
+          <div className={cn('rounded-lg p-2 transition-all', breadthBullish ? 'tile-bull' : 'tile-bear')}>
             <div className="flex items-center justify-between">
               <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
                 Breadth A/D
@@ -84,7 +88,10 @@ export function MarketOverview() {
                 {breadth ? `${breadth.advanceCount}/${breadth.declineCount}` : '-'}
               </span>
             </div>
-            <div className="mt-1 font-mono text-lg font-bold tnum text-foreground">
+            <div className={cn(
+              'mt-1 font-mono text-lg font-bold tnum',
+              breadthBullish ? 'text-bull' : 'text-bear'
+            )}>
               {breadth ? breadth.advanceDeclineRatio.toFixed(2) : '-'}
             </div>
           </div>
@@ -96,7 +103,7 @@ export function MarketOverview() {
             <TrendBadge trend={market.trend} />
             <StructureBadge structure={market.structure} />
             <BiasBadge bias={market.bias} />
-            <span className="rounded border border-border/60 bg-muted/40 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
+            <span className="rounded border border-info/30 bg-info/10 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-widest text-info">
               {market.marketState.replace(/_/g, ' ')}
             </span>
             <span className="rounded border border-border/60 bg-muted/40 px-2 py-0.5 font-mono text-[10px] font-medium uppercase tracking-widest text-muted-foreground">
@@ -112,22 +119,22 @@ export function MarketOverview() {
               <span>Market Score</span>
               <span
                 className={cn(
-                  'tnum font-semibold',
-                  market.marketScore >= 0 ? 'text-bull' : 'text-bear'
+                  'tnum font-bold',
+                  market.marketScore >= 0 ? 'text-bull text-glow-bull' : 'text-bear text-glow-bear'
                 )}
               >
                 {market.marketScore >= 0 ? '+' : ''}
                 {market.marketScore.toFixed(0)}
               </span>
             </div>
-            <div className="relative h-2 w-full overflow-hidden rounded-full bg-muted">
+            <div className="relative h-2.5 w-full overflow-hidden rounded-full bg-muted">
               <div className="absolute left-1/2 top-0 h-full w-px bg-border" />
               <div
                 className={cn(
-                  'absolute top-0 h-full transition-all duration-500',
+                  'absolute top-0 h-full rounded-full transition-all duration-500',
                   market.marketScore >= 0
-                    ? 'bg-bull shadow-[0_0_8px_rgba(52,211,153,0.55)]'
-                    : 'bg-bear shadow-[0_0_8px_rgba(251,113,133,0.55)]'
+                    ? 'bg-gradient-to-r from-bull/60 to-bull shadow-[0_0_10px_rgba(52,211,153,0.6)]'
+                    : 'bg-gradient-to-l from-bear/60 to-bear shadow-[0_0_10px_rgba(251,113,133,0.6)]'
                 )}
                 style={{
                   width: `${Math.abs(market.marketScore) / 2}%`,
@@ -144,10 +151,10 @@ export function MarketOverview() {
             <div className="mb-1 flex items-center gap-1 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
               <Activity className="h-3 w-3 text-info" /> Market Facts
             </div>
-            <ul className="space-y-0.5 font-mono text-[11px] text-muted-foreground">
+            <ul className="space-y-0.5 font-mono text-[11px] text-foreground/80">
               {market.facts.slice(0, 6).map((f, i) => (
                 <li key={i} className="leading-snug">
-                  <span className="mr-1.5 text-bull/60">›</span>
+                  <span className="mr-1.5 text-info">›</span>
                   {f}
                 </li>
               ))}
@@ -174,20 +181,25 @@ function IndexTile({
   return (
     <div
       className={cn(
-        'relative overflow-hidden rounded-lg border bg-gradient-to-br p-2 transition-all',
-        positive
-          ? 'border-bull/30 from-bull/10 to-transparent'
-          : 'border-bear/30 from-bear/10 to-transparent'
+        'relative overflow-hidden rounded-lg p-2 transition-all',
+        positive ? 'tile-bull' : 'tile-bear'
       )}
     >
-      <div className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+      {/* Subtle glow accent */}
+      <div
+        className={cn(
+          'absolute -right-4 -top-4 h-12 w-12 rounded-full blur-xl',
+          positive ? 'bg-bull/20' : 'bg-bear/20'
+        )}
+      />
+      <div className="relative font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
         {label}
       </div>
-      <div className="font-mono text-base font-bold tnum text-foreground">
+      <div className="relative font-mono text-base font-bold tnum text-foreground">
         {price?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) ??
           '—'}
       </div>
-      <div className="flex items-center justify-between">
+      <div className="relative flex items-center justify-between">
         {changePct !== undefined && <ChangePct value={changePct} />}
         {vwap && (
           <span className="font-mono text-[10px] tnum text-muted-foreground">
