@@ -75,7 +75,14 @@ export class NSEProvider implements Provider {
       throw new Error('NSE rate limit reached');
     }
 
-    // Ensure we have cookies (NSE requires a session cookie)
+    // If a proxy is configured (Vercel function / Cloudflare Worker in India),
+    // route the request through it. This bypasses NSE's geo-block on non-Indian IPs.
+    const proxyUrl = process.env.NSE_PROXY_URL;
+    if (proxyUrl) {
+      return this.fetchViaProxy(url, proxyUrl);
+    }
+
+    // Direct fetch (works only from Indian IPs)
     if (!this.cookies || Date.now() > this.cookieExpiry) {
       await this.refreshCookies();
     }
@@ -96,11 +103,10 @@ export class NSEProvider implements Provider {
         });
 
         if (res.status === 429 || res.status === 403) {
-          // Rate limited — block for 30 seconds
           rateLimiter.blockFor('NSE', 30000);
           this.health.rateLimitUntil = Date.now() + 30000;
           this.health.status = 'RATE_LIMITED';
-          throw new Error(`NSE returned ${res.status} — rate limited`);
+          throw new Error(`NSE returned ${res.status} — ${res.status === 403 ? 'geo-blocked or rate limited' : 'rate limited'}`);
         }
 
         if (!res.ok) {
@@ -114,7 +120,6 @@ export class NSEProvider implements Provider {
         return data;
       } catch (e) {
         if (attempt < retries) {
-          // Wait and retry with fresh cookies
           await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
           await this.refreshCookies();
           continue;
@@ -124,6 +129,48 @@ export class NSEProvider implements Provider {
         this.health.status = 'ERROR';
         throw e;
       }
+    }
+  }
+
+  /**
+   * Fetch via an Indian-region proxy (Vercel function or Cloudflare Worker).
+   * The proxy runs in Mumbai/Bombay, can reach NSE, and relays the JSON back.
+   * This bypasses NSE's geo-block on non-Indian server IPs.
+   */
+  private async fetchViaProxy(nseUrl: string, proxyBaseUrl: string): Promise<any> {
+    if (!rateLimiter.canCall('NSE')) {
+      throw new Error('NSE rate limit reached');
+    }
+    rateLimiter.recordCall('NSE');
+    this.health.callCount++;
+
+    try {
+      // The proxy accepts the NSE path as a query param
+      const nsePath = nseUrl.replace(NSE_BASE, '');
+      const proxyUrl = `${proxyBaseUrl.replace(/\/$/, '')}?path=${encodeURIComponent(nsePath)}`;
+
+      const res = await fetch(proxyUrl, {
+        headers: {
+          'Accept': 'application/json',
+          'X-Proxy-Secret': process.env.NSE_PROXY_SECRET || '',
+        },
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`NSE proxy returned ${res.status}: ${text.substring(0, 200)}`);
+      }
+
+      const data = await res.json();
+      this.health.lastSuccess = Date.now();
+      this.health.status = 'ACTIVE';
+      this.health.lastError = null;
+      return data;
+    } catch (e) {
+      this.health.errorCount++;
+      this.health.lastError = (e as Error).message;
+      this.health.status = 'ERROR';
+      throw e;
     }
   }
 

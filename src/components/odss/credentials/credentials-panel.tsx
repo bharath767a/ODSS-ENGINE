@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { useToast } from '@/hooks/use-toast';
-import { Eye, EyeOff, Save, Trash2, Key, Shield, CheckCircle2, AlertCircle, Loader2, Server } from 'lucide-react';
+import { Eye, EyeOff, Save, Trash2, Key, Shield, CheckCircle2, AlertCircle, Loader2, Server, Globe } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { cn } from '@/lib/utils';
 
@@ -29,19 +29,25 @@ const PROVIDER_LABELS: Record<string, { name: string; icon: any; color: string; 
     name: 'Angel One SmartAPI',
     icon: Key,
     color: 'text-bull',
-    desc: 'Real-time NSE data + option chains + WebSocket. Recommended primary provider.',
+    desc: 'Real-time NSE data + option chains + WebSocket. Recommended primary provider. Works from any location.',
   },
   upstox: {
     name: 'Upstox API v2',
     icon: Key,
     color: 'text-info',
-    desc: 'Fallback provider with good historical data access.',
+    desc: 'Fallback provider with good historical data access. Works from any location.',
   },
   server: {
     name: 'Server Configuration',
     icon: Server,
     color: 'text-warn',
     desc: 'Server IP must match the IP whitelisted in your Angel One app.',
+  },
+  nse_proxy: {
+    name: 'NSE Proxy (Free Fallback)',
+    icon: Globe,
+    color: 'text-ai',
+    desc: 'A tiny serverless function deployed in Mumbai (Vercel/Cloudflare) that fetches NSE data locally. Bypasses NSE geo-block. Optional but recommended — see deployment guide in /nse-proxy folder.',
   },
 };
 
@@ -142,29 +148,35 @@ export function CredentialsPanel() {
           color: 'text-muted-foreground',
           desc: '',
         };
-        const allSet = provider.fields.filter((f) => f.required).every((f) => f.isSet);
+        const requiredFields = provider.fields.filter((f) => f.required);
+        const optionalFields = provider.fields.filter((f) => !f.required);
+        const allRequiredSet = requiredFields.length > 0 && requiredFields.every((f) => f.isSet);
+        const anyOptionalSet = optionalFields.some((f) => f.isSet);
+        const isConfigured = allRequiredSet || (requiredFields.length === 0 && anyOptionalSet);
         const Icon = meta.icon;
 
         return (
-          <Card key={provider.provider} className={cn('border-border/50 bg-card/50 backdrop-blur-sm', allSet && provider.provider !== 'server' && 'accent-bull')}>
+          <Card key={provider.provider} className={cn('border-border/50 bg-card/50 backdrop-blur-sm', isConfigured && provider.provider !== 'server' && 'accent-bull')}>
             <CardHeader className="pb-2">
               <CardTitle className="flex items-center justify-between text-sm">
                 <span className="flex items-center gap-2">
                   <Icon className={cn('h-4 w-4', meta.color)} />
                   <span className="font-mono font-bold tracking-wide text-foreground">{meta.name}</span>
-                  {allSet ? (
+                  {isConfigured ? (
                     <Badge className="gap-1 bg-bull/15 text-bull hover:bg-bull/20">
                       <CheckCircle2 className="h-3 w-3" /> CONFIGURED
                     </Badge>
                   ) : provider.provider === 'server' ? (
                     <Badge variant="secondary" className="text-muted-foreground">INFO</Badge>
+                  ) : provider.provider === 'nse_proxy' ? (
+                    <Badge variant="secondary" className="text-muted-foreground">OPTIONAL</Badge>
                   ) : (
                     <Badge variant="secondary" className="gap-1 bg-warn/15 text-warn hover:bg-warn/20">
                       <AlertCircle className="h-3 w-3" /> NOT SET
                     </Badge>
                   )}
                 </span>
-                {provider.provider !== 'server' && provider.fields.some((f) => f.isSet) && (
+                {provider.provider !== 'server' && provider.provider !== 'nse_proxy' && provider.fields.some((f) => f.isSet) && (
                   <Button
                     size="sm"
                     variant="ghost"

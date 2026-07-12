@@ -1,0 +1,6 @@
+{
+  "name": "odss-nse-proxy",
+  "version": "1.0.0",
+  "main": "nse-proxy.js",
+  "compatibility_date": "2024-01-01"
+}

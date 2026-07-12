@@ -23,6 +23,10 @@ const CREDENTIAL_FIELDS = {
   server: [
     { key: 'SERVER_PUBLIC_IP', label: 'Server Public IP', required: true, type: 'text' },
   ],
+  nse_proxy: [
+    { key: 'NSE_PROXY_URL', label: 'NSE Proxy URL (Vercel/Cloudflare)', required: false, type: 'text' },
+    { key: 'NSE_PROXY_SECRET', label: 'NSE Proxy Secret', required: false, type: 'password' },
+  ],
 };
 
 function readEnvFile(): Record<string, string> {
@@ -71,6 +75,12 @@ function writeEnvFile(env: Record<string, string>): void {
     lines.push(`${field.key}=${env[field.key] ?? ''}`);
   }
   lines.push('');
+  lines.push('# --- NSE Proxy (Vercel/Cloudflare in Mumbai region) ---');
+  lines.push('# Optional but recommended. Bypasses NSE geo-block on non-Indian servers.');
+  for (const field of CREDENTIAL_FIELDS.nse_proxy) {
+    lines.push(`${field.key}=${env[field.key] ?? ''}`);
+  }
+  lines.push('');
   lines.push('# --- Data Source Selection ---');
   lines.push('DATA_PROVIDER=AUTO');
   lines.push('');
@@ -114,6 +124,7 @@ export async function PUT(req: NextRequest) {
         ...CREDENTIAL_FIELDS.angelone,
         ...CREDENTIAL_FIELDS.upstox,
         ...CREDENTIAL_FIELDS.server,
+        ...CREDENTIAL_FIELDS.nse_proxy,
       ].map((f) => f.key);
       if (allKeys.includes(key)) {
         env[key] = value;

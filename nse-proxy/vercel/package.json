@@ -1,0 +1,10 @@
+{
+  "name": "odss-nse-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NSE India data proxy for ODSS — deploys to Mumbai region",
+  "dependencies": {
+    "@vercel/node": "^3.0.0"
+  },
+  "regions": ["bom1"]
+}
