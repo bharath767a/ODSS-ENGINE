@@ -1,0 +1,1249 @@
+================================================================================
+  ODSS — OPTIONS DECISION SUPPORT SYSTEM
+  Complete Architecture & Concept Wiring Document
+  Version 1.0 | Indian Market Options Trading Decision Engine
+================================================================================
+
+TABLE OF CONTENTS
+─────────────────
+1.  Mission & Philosophy
+2.  What This System Does (Elevator Pitch)
+3.  What This System Is NOT
+4.  High-Level Architecture
+5.  The 22 Phases — How They Wire Together
+6.  The 12 Engines — Deep Dive
+7.  Data Flow (End-to-End)
+8.  State Machine (Trade Lifecycle)
+9.  Decision Engine (How the Final Call Is Made)
+10. AI Explanation Engine
+11. Technology Stack
+12. Project File Structure
+13. Services & Ports
+14. Database Schema
+15. Configuration System
+16. Creative Enhancements (Beyond the Original Spec)
+17. How to Run It
+18. How to Extend It (Connecting Real Broker Data)
+19. Key Design Principles Enforced
+20. Glossary
+
+================================================================================
+1. MISSION & PHILOSOPHY
+================================================================================
+
+Build a professional Options Decision Support System for the Indian market.
+
+This is NOT an auto-trading bot. It:
+  - Analyzes the market continuously
+  - Recommends the highest-probability trade
+  - Manages the trade after entry
+  - Explains every decision
+  - Lears from history
+
+The human remains the final decision maker. Always.
+
+Core tenets:
+  - Every recommendation must be reproducible and explainable
+  - Every decision must be logged
+  - Entries and exits are driven by UNDERLYING price (not the option premium)
+  - Never exit because one indicator changes
+  - Never recommend immediate buying — wait for a trigger
+  - Modular architecture — each engine has a single responsibility
+  - Deterministic decision logic — same inputs → same outputs
+
+
+================================================================================
+2. WHAT THIS SYSTEM DOES (ELEVATOR PITCH)
+================================================================================
+
+ODSS is a real-time options trading decision engine that:
+
+1.  Simulates (or ingests) live Indian market data — NIFTY, BANKNIFTY,
+    FINNIFTY, MIDCPNIFTY, and 26 liquid F&O stocks across 8 sectors.
+
+2.  Runs 12 independent analysis engines every few seconds:
+      Market, Sector, Relative Strength, Technical, Option Chain,
+      Opportunity, Strike Selection, Entry, Risk, Trade Management,
+      Exit, and Decision.
+
+3.  Ranks ALL tradable symbols and surfaces the Top 10 opportunities
+    with direction (CE/PE), score, confidence, and a clear decision
+    (ENTER / WAIT / WATCH / AVOID).
+
+4.  For each top opportunity, produces a complete trade plan:
+      Strike selection (ATM/ITM/OTM)
+      Entry type (Breakout / Retest / VWAP / Liquidity Sweep)
+      Risk plan (Entry, SL, TP1, TP2, TP3, RR, Position Size, Max Loss)
+
+5.  After entry, continuously manages the trade via a 10-state
+    state machine — moving SL to breakeven, trailing, partial exits,
+    and full exits based on a multi-factor Exit Score.
+
+6.  Uses an LLM (AI Coach) to explain in plain English WHY each
+    decision was made — why selected, why rejected, why holding,
+    why exiting. The AI never decides; it only explains.
+
+7.  Archives every completed trade to a journal and computes
+    performance analytics (win rate, profit factor, avg R, drawdown).
+
+8.  Streams everything live to a dashboard via WebSocket.
+
+
+================================================================================
+3. WHAT THIS SYSTEM IS NOT
+================================================================================
+
+- NOT an auto-trading bot (no orders are ever placed)
+- NOT a signal-selling tip service
+- NOT a black box (every decision is explainable and logged)
+- NOT dependent on one indicator (multi-factor, weighted voting)
+- NOT connected to a real broker feed by default (uses a realistic
+  market simulator — see section 18 for how to connect real data)
+
+
+================================================================================
+4. HIGH-LEVEL ARCHITECTURE
+================================================================================
+
+The system has 4 logical layers, each decoupled:
+
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         PRESENTATION LAYER                              │
+│   Dashboard (Next.js + React + shadcn/ui + Tailwind)                   │
+│   - 5 tabs: Dashboard, Opportunities, Journal, Analytics, Config       │
+│   - Real-time updates via Socket.io client                             │
+└─────────────────────────────────────────────────────────────────────────┘
+                                   │
+                    WebSocket (live) + REST API (mutations/DB)
+                                   │
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          ORCHESTRATION LAYER                            │
+│   mini-services/odss-market (port 3002) — Bun + Socket.io              │
+│                                                                         │
+│   ┌─────────────┐   ┌──────────────┐   ┌─────────────────────────┐    │
+│   │ Tick Loop   │──>│  Scan Loop   │──>│  Orchestrator           │    │
+│   │ (every 3s)  │   │  (every 5s)  │   │  (runs all 12 engines)  │    │
+│   └─────────────┘   └──────────────┘   └─────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────┘
+                                   │
+┌─────────────────────────────────────────────────────────────────────────┐
+│                          ENGINE LAYER (12 ENGINES)                      │
+│                                                                         │
+│   Market ─> Sector ─> RS ─> Opportunity ─> Strike ─> Entry ─> Risk    │
+│                                                                         │
+│   Decision (aggregates all votes)                                       │
+│                                                                         │
+│   [If trade active]: Trade Management ─> Exit ─> State Machine          │
+│                                                                         │
+│   AI Explanation Engine (LLM — explains, never decides)                │
+└─────────────────────────────────────────────────────────────────────────┘
+                                   │
+┌─────────────────────────────────────────────────────────────────────────┐
+│                            DATA LAYER                                   │
+│   ┌──────────────────┐    ┌──────────────────────────────────────┐     │
+│   │ Market Simulator │    │ Prisma ORM (SQLite)                  │     │
+│   │ (synthetic feed) │    │ - Snapshots, Recommendations,        │     │
+│   │ - 30 symbols     │    │   Trade States, Journal, Logs,       │     │
+│   │ - 6 regimes      │    │   Config, Analytics                  │     │
+│   │ - Black-Scholes  │    └──────────────────────────────────────┘     │
+│   └──────────────────┘                                                  │
+└─────────────────────────────────────────────────────────────────────────┘
+
+KEY ARCHITECTURAL RULE (Phase 1):
+  - Every module has a single responsibility
+  - Modules communicate ONLY through shared data models (types.ts)
+  - No module directly depends on another module's internal logic
+  - Each engine is a PURE FUNCTION — same input → same output
+
+
+================================================================================
+5. THE 22 PHASES — HOW THEY WIRE TOGETHER
+================================================================================
+
+The phases execute in a specific pipeline order on every scan:
+
+┌──────────────────────────────────────────────────────────────────────┐
+│                    SCAN PIPELINE (every 5 seconds)                   │
+├──────────────────────────────────────────────────────────────────────┤
+│                                                                      │
+│  PHASE 2: DATA LAYER                                                 │
+│  ├─ Market simulator ticks (advances prices, builds candles)        │
+│  ├─ Option chains generated (Black-Scholes pricing + greeks)        │
+│  └─ Breadth, VIX computed                                            │
+│         │                                                            │
+│         ▼                                                            │
+│  PHASE 3: MARKET ENGINE                                              │
+│  ├─ Analyzes NIFTY + BANKNIFTY + VIX + Breadth                      │
+│  ├─ Determines: Trend, Structure, Momentum, Volatility,             │
+│  │              Day Type, Bias, Opening Range, VWAP                 │
+│  └─ OUTPUT: Market Score (-100..100), Market Confidence (0..100),   │
+│             Market State                                             │
+│         │                                                            │
+│         ▼                                                            │
+│  PHASE 4: SECTOR ENGINE                                              │
+│  ├─ Ranks 8 sectors by avg stock performance                        │
+│  └─ OUTPUT: Sector Rank, Strength, Momentum, Leadership             │
+│         │                                                            │
+│         ▼                                                            │
+│  PHASE 5: RELATIVE STRENGTH ENGINE                                   │
+│  ├─ Ranks stocks WITHIN each sector vs sector avg                   │
+│  └─ OUTPUT: Strongest stocks, Weakest stocks, Leadership changes    │
+│         │                                                            │
+│         ▼                                                            │
+│  PHASE 8: OPPORTUNITY ENGINE  (combines Phases 3+4+5+6+7)           │
+│  │                                                                   │
+│  │  For EACH of the 30 symbols:                                      │
+│  │  ├─ PHASE 6: TECHNICAL ENGINE                                     │
+│  │  │  └─ EMA, ATR, VWAP, RSI, ADX, Stochastic, S/R,                │
+│  │  │     Breakout, Pullback, Volume, Liquidity Sweep               │
+│  │  ├─ PHASE 7: OPTION CHAIN ENGINE                                  │
+│  │  │  └─ PCR, IV skew/rank, Call/Put writing, Unwinding,           │
+│  │  │     Max Pain, Expected Move, Liquidity                         │
+│  │  └─ Combines all scores with configurable weights                │
+│  │                                                                   │
+│  └─ OUTPUT: Top 10 opportunities ranked by total score              │
+│         │                                                            │
+│         ▼                                                            │
+│  For each TOP 10 opportunity, build full recommendation:            │
+│                                                                      │
+│  PHASE 9: STRIKE SELECTION ENGINE                                    │
+│  ├─ Selects ATM / ITM / OTM based on conviction + liquidity         │
+│  └─ OUTPUT: Primary Strike, Alt Strike, Aggressive Strike           │
+│         │                                                            │
+│         ▼                                                            │
+│  PHASE 10: ENTRY ENGINE                                              │
+│  ├─ Chooses: Market / Breakout / Retest / VWAP / Liquidity Sweep    │
+│  ├─ NEVER recommends immediate buying                                │
+│  └─ OUTPUT: Entry type, Entry price (underlying), Entry trigger     │
+│         │                                                            │
+│         ▼                                                            │
+│  PHASE 11: RISK ENGINE                                               │
+│  ├─ Calculates: Entry, SL, TP1, TP2, TP3, RR, Position Size,        │
+│  │              Max Loss, Max Profit                                 │
+│  └─ Uses UNDERLYING price only (not option premium)                 │
+│         │                                                            │
+│         ▼                                                            │
+│  PHASE 14: DECISION ENGINE                                           │
+│  ├─ Every module VOTES: ENTER / WAIT / WATCH / AVOID                │
+│  ├─ Votes are weighted (configurable):                              │
+│  │    Market 15% | Sector 10% | RS 10% | Technical 25% |           │
+│  │    Option Chain 25% | Risk 15%                                    │
+│  └─ OUTPUT: Final Decision + Confidence + Reasoning                 │
+│         │                                                            │
+│         ▼                                                            │
+│  ── IF A TRADE IS ACTIVE ──                                          │
+│                                                                      │
+│  PHASE 12: TRADE MANAGEMENT ENGINE                                   │
+│  ├─ Monitors: Price, VWAP, Trend, Momentum, Volume, OI,             │
+│  │            Sector, Market, ATR, Structure                         │
+│  └─ OUTPUT: Hold / Trail SL / Move to Breakeven / Partial Exit /    │
+│             Full Exit / Re-entry / Watch                             │
+│         │                                                            │
+│         ▼                                                            │
+│  PHASE 13: EXIT ENGINE                                               │
+│  ├─ Creates Exit Score (0..100) using:                              │
+│  │    Trend + VWAP + OI + Volume + Sector + Market + Structure      │
+│  ├─ NEVER exits because ONE indicator changes                       │
+│  └─ OUTPUT: Continue / Trail / Reduce Position / Exit               │
+│         │                                                            │
+│         ▼                                                            │
+│  PHASE 15: STATE MACHINE                                             │
+│  ├─ Transitions trade state based on management + exit signals      │
+│  └─ 10 states: WATCHLIST → READY → WAITING_ENTRY → ENTERED →        │
+│                TP1 → TP2 → TRAILING → WEAKENING → EXIT → COMPLETE   │
+│                                                                      │
+│  ── ALWAYS ──                                                        │
+│                                                                      │
+│  PHASE 16: AI EXPLANATION ENGINE                                     │
+│  ├─ LLM explains WHY (never decides)                                │
+│  └─ Explains: Why selected / Why rejected /                         │
+│               Why holding / Why trailing / Why exiting              │
+│         │                                                            │
+│         ▼                                                            │
+│  PHASE 18: DATABASE                                                  │
+│  ├─ Persists all snapshots, recommendations, trade states,          │
+│  │  journal entries, logs, config                                    │
+│  └─ Everything is reproducible and replayable                       │
+│                                                                      │
+└──────────────────────────────────────────────────────────────────────┘
+
+PARALLEL/UI PHASES:
+  PHASE 17: DASHBOARD — displays everything live
+  PHASE 19: JOURNAL — auto-archives completed trades
+  PHASE 20: ANALYTICS — computes performance metrics
+  PHASE 21: CONFIGURATION — all thresholds editable via UI
+
+
+================================================================================
+6. THE 12 ENGINES — DEEP DIVE
+================================================================================
+
+Each engine is a pure function in src/lib/odss/engines/.
+File naming convention: <name>-engine.ts
+
+───────────────────────────────────────────────────────────────────────────
+ENGINE 1: MARKET ENGINE  (Phase 3)
+File: engines/market-engine.ts
+───────────────────────────────────────────────────────────────────────────
+INPUT:  NIFTY quote, BANKNIFTY quote, India VIX, Market Breadth
+LOGIC:
+  - EMA 9/21/50 alignment on NIFTY
+  - Linear regression slope for momentum
+  - VIX classification (LOW < 12, NORMAL < 18, HIGH < 25, EXTREME >= 25)
+  - Opening Range (first 15 min high/low)
+  - Day Type (TREND / REVERSAL / RANGE / GAP_UP / GAP_DOWN)
+  - Bias from VWAP position + breadth + trend
+  - Market regime detection (6 regimes)
+  - Market Score (-100..100) from weighted signal aggregation
+  - Confidence from signal alignment
+OUTPUT:
+  marketScore:        -100..100
+  marketConfidence:    0..100
+  marketState:         TRENDING_UP / TRENDING_DOWN / RANGING / SELLING_OFF
+                       / RECOVERING / CHOPPY / FLAT
+  trend, structure, momentum, volatility, dayType, bias
+  openingRange, vwap, breadth
+  facts[]:             human-readable facts for the dashboard
+
+───────────────────────────────────────────────────────────────────────────
+ENGINE 2: SECTOR ENGINE  (Phase 4)
+File: engines/sector-engine.ts
+───────────────────────────────────────────────────────────────────────────
+INPUT:  Quotes for all stocks grouped by sector
+LOGIC:
+  - Average change % per sector
+  - Advance/decline count within sector
+  - Compare sector performance vs NIFTY (leadership)
+  - Strength: -100..100 from avg change
+  - Momentum: combines change + breadth
+OUTPUT:
+  sectors[]: [{ sector, rank, strength, momentum, leadership, score }]
+  leadership: LEADING / LAGGING / MIXED
+
+───────────────────────────────────────────────────────────────────────────
+ENGINE 3: RELATIVE STRENGTH ENGINE  (Phase 5)
+File: engines/relative-strength-engine.ts
+───────────────────────────────────────────────────────────────────────────
+INPUT:  All stock quotes + sector averages
+LOGIC:
+  - Compare each stock vs NIFTY (RS vs market)
+  - Compare each stock vs its sector avg (RS vs sector)
+  - Rank within sector
+  - Leadership classification
+OUTPUT:
+  rows[]: [{ symbol, sector, rsScore, rank, leadership, vsSector, score }]
+
+───────────────────────────────────────────────────────────────────────────
+ENGINE 4: TECHNICAL ENGINE  (Phase 6)
+File: engines/technical-engine.ts
+───────────────────────────────────────────────────────────────────────────
+INPUT:  Intraday candles (1-min) for a symbol
+LOGIC:
+  - EMA 9/21/50 + alignment (BULLISH/BEARISH/MIXED)
+  - ATR (14) + ATR%
+  - RSI (14)
+  - ADX (14) — trend strength
+  - Stochastic %K/%D
+  - VWAP + position (ABOVE/BELOW/AT)
+  - Support/Resistance from pivot clustering
+  - Breakout detection (price testing prior pivot)
+  - Pullback detection (price at EMA21 or VWAP)
+  - Volume structure (RISING/FALLING/FLAT)
+  - Liquidity sweep (wick beyond prior high/low then reversal)
+  - Momentum from slope + RSI + Stochastic
+OUTPUT:  Only technical facts (no opinions)
+  trend, emaAlignment, vwap, vwapPosition, atr, atrPct, rsi, adx,
+  support[], resistance[], breakout, pullback, volumeStructure,
+  liquiditySweep, momentum, score (0..100)
+
+───────────────────────────────────────────────────────────────────────────
+ENGINE 5: OPTION CHAIN ENGINE  (Phase 7)
+File: engines/option-chain-engine.ts
+───────────────────────────────────────────────────────────────────────────
+INPUT:  Option chain (strikes, OI, OI change, IV, volume, bid/ask)
+LOGIC:
+  - PCR (Put-Call Ratio, OI-based) → bullish if > 1.2, bearish if < 0.8
+  - ATM IV + IV Skew (OTM put IV - OTM call IV)
+  - IV Rank (proxy)
+  - Call writing trend (OI change > 0 = INCREASING = bearish resistance)
+  - Put writing trend (OI change > 0 = INCREASING = bullish support)
+  - Unwinding detection (OI decreasing + opposite side increasing)
+  - Support strike = highest put OI
+  - Resistance strike = highest call OI
+  - Max Pain strike (minimizes total option holder loss)
+  - ATM bid-ask spread (liquidity check)
+  - Expected move (1 std dev)
+OUTPUT:
+  pcr, pcrSignal, ivSkew, ivRank, atmIV,
+  callWritingTrend, putWritingTrend, unwinding,
+  liquidityStrike, maxPain, spread,
+  supportStrike, resistanceStrike, expectedMove,
+  score (0..100), bias
+
+───────────────────────────────────────────────────────────────────────────
+ENGINE 6: OPPORTUNITY ENGINE  (Phase 8)
+File: engines/opportunity-engine.ts
+───────────────────────────────────────────────────────────────────────────
+INPUT:  Market + Sector + RS outputs (runs Technical + Option Chain per symbol)
+LOGIC:
+  - For each of 30 symbols:
+      Run Technical Engine
+      Run Option Chain Engine
+      Determine direction (CE if bullish signals dominate, PE if bearish)
+      Compute per-engine scores aligned to direction
+      Weighted total score using config weights
+      Confidence from engine alignment count
+  - Sort all symbols by total score descending
+  - Assign ranks
+OUTPUT:
+  rows[]: Top 10 opportunities with all scores + direction + confidence
+
+───────────────────────────────────────────────────────────────────────────
+ENGINE 7: STRIKE SELECTION ENGINE  (Phase 9)
+File: engines/strike-engine.ts
+───────────────────────────────────────────────────────────────────────────
+INPUT:  Symbol, direction, technical, option chain, conviction
+LOGIC:
+  - Low conviction (< 45)  → ITM strike (safer, higher delta)
+  - Medium conviction (45-70) → ATM strike (balanced)
+  - High conviction (> 70) → OTM strike (cheaper, more leverage)
+  - Check liquidity (OI > 1M = high, > 250K = adequate, else low)
+OUTPUT:
+  primaryStrike, altStrike (ATM), aggressiveStrike (OTM),
+  strikeType, primaryLTP, primaryDelta, primaryIV, liquidityNote
+
+───────────────────────────────────────────────────────────────────────────
+ENGINE 8: ENTRY ENGINE  (Phase 10)
+File: engines/entry-engine.ts
+───────────────────────────────────────────────────────────────────────────
+INPUT:  Symbol, direction, technical
+LOGIC (priority order — picks first valid setup):
+  1. LIQUIDITY_SWEEP — if a sweep was detected, enter on reclaim
+  2. BREAKOUT — if price testing prior pivot, enter on close beyond
+  3. RETEST — if price at EMA21 or VWAP, enter on bounce/rejection
+  4. VWAP — if price near VWAP, enter on VWAP test
+  5. VWAP (fallback) — wait for pullback to VWAP, never chase
+  SL is always ATR-based
+  NEVER recommends immediate market buying
+OUTPUT:
+  entryType, entryPrice (underlying), entryTrigger, stopLoss, reason
+
+───────────────────────────────────────────────────────────────────────────
+ENGINE 9: RISK ENGINE  (Phase 11)
+File: engines/risk-engine.ts
+───────────────────────────────────────────────────────────────────────────
+INPUT:  Symbol, direction, entry plan, technical
+LOGIC:
+  - SL distance = max(|entry - SL|, ATR)
+  - TP1 = 1R, TP2 = 2R, TP3 = 3R (R = SL distance)
+  - RR = 2 (to TP2)
+  - Position size = (capital × riskPerTrade%) / (riskPerShare × lotSize)
+  - riskPerShare = SL distance × delta (approx 0.5 for ATM)
+  - Max loss = lots × lotSize × riskPerShare
+  - Max profit = lots × lotSize × profitPerShare (to TP2)
+OUTPUT:
+  entry, stopLoss, tp1, tp2, tp3, rr, positionSize (lots),
+  maxLoss (₹), maxProfit (₹), riskPerShare
+
+───────────────────────────────────────────────────────────────────────────
+ENGINE 10: TRADE MANAGEMENT ENGINE  (Phase 12)
+File: engines/trade-management-engine.ts
+───────────────────────────────────────────────────────────────────────────
+INPUT:  Active trade, technical, option chain, market
+LOGIC (decision rules in priority):
+  - If R <= -1:               FULL_EXIT (stop loss hit)
+  - If trend reversed + R>0.5: TRAIL_SL (lock profits)
+  - If TP2 hit:               PARTIAL_EXIT_TP2 + move SL to breakeven
+  - If TP1 hit + state ENTERED: MOVE_TO_BREAKEVEN
+  - If trend+market against + R<0.5: FULL_EXIT
+  - If below VWAP + in loss:  WATCH
+  - If R > 1.5:               TRAIL_SL (ATR × trailMultiple)
+  - Else:                     HOLD
+OUTPUT:
+  action: HOLD / TRAIL_SL / MOVE_TO_BREAKEVEN / PARTIAL_EXIT_TP1
+          / PARTIAL_EXIT_TP2 / FULL_EXIT / REENTRY / WATCH
+  newStopLoss?, newTarget?, reason
+
+───────────────────────────────────────────────────────────────────────────
+ENGINE 11: EXIT ENGINE  (Phase 13)
+File: engines/exit-engine.ts
+───────────────────────────────────────────────────────────────────────────
+INPUT:  Active trade, technical, option chain, market, sector
+LOGIC (Exit Score 0..100, higher = more likely to exit):
+  +25  Trend reversed against position
+  +15  Below VWAP while in loss
+  +15  Option chain bias flipping against
+  +10  Unwinding detected (call/put)
+  +5   Volume fading on rally
+  +10  Sector weakening
+  +15  Market turning against
+  +10  Liquidity sweep against position
+  ── NEVER exits on a single indicator ──
+  Score >= 60 → EXIT
+  Score >= 40 → REDUCE_POSITION
+  Score >= 20 + R>0.5 → TRAIL
+  Else → CONTINUE
+OUTPUT:
+  action: CONTINUE / TRAIL / REDUCE_POSITION / EXIT
+  exitScore (0..100), reason
+
+───────────────────────────────────────────────────────────────────────────
+ENGINE 12: DECISION ENGINE  (Phase 14)
+File: engines/decision-engine.ts
+───────────────────────────────────────────────────────────────────────────
+INPUT:  Direction + all engine outputs + risk plan
+LOGIC:
+  Each of the 6 engine categories produces a VOTE:
+    ENTER / WAIT / WATCH / AVOID
+  with a weight (from config) and confidence.
+
+  Weighted aggregation:
+    ENTER  → +weight × 1.0
+    WAIT   → +weight × 0.4
+    WATCH  → +weight × 0.1
+    AVOID  → -weight × 1.5
+
+  Final decision:
+    agg >= 0.7  → ENTER
+    agg >= 0.4  → WAIT
+    agg >= 0.1  → WATCH
+    else        → AVOID
+
+  Confidence = weighted average of confidences from engines
+  aligned with the final decision.
+OUTPUT:
+  decision: ENTER / WAIT / WATCH / AVOID
+  confidence (0..100), reasoning (string), votes[] (all engine votes)
+
+
+================================================================================
+7. DATA FLOW (END-TO-END)
+================================================================================
+
+Here's exactly what happens every 5 seconds:
+
+  ┌────────────────────────────────────────────────────────────────┐
+  │ 1. SIMULATOR TICK (every 3s, in mini-service)                │
+  │    - Advances price for all 30 symbols using regime params    │
+  │    - Builds 1-min candles                                     │
+  │    - Updates day high/low, VWAP, volume                       │
+  │    - Updates India VIX (with drift + noise)                   │
+  │    - Broadcasts "market:tick" to all connected dashboards     │
+  └────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+  ┌────────────────────────────────────────────────────────────────┐
+  │ 2. ENGINE SCAN (every 5s, in mini-service)                    │
+  │    runScan() orchestrates:                                    │
+  │                                                               │
+  │    a. Market Engine   →  marketScore, bias, state             │
+  │    b. Sector Engine   →  sector rankings                      │
+  │    c. RS Engine       →  stock RS rankings                    │
+  │    d. Opportunity Engine                                      │
+  │       └─ for each of 30 symbols:                             │
+  │          ├─ Technical Engine (EMA, ATR, RSI, ADX, S/R...)    │
+  │          └─ Option Chain Engine (PCR, OI, IV, max pain...)   │
+  │       └─ ranks all, takes top 10                             │
+  │    e. For each top 10:                                        │
+  │       ├─ Strike Selection Engine                             │
+  │       ├─ Entry Engine                                        │
+  │       ├─ Risk Engine                                         │
+  │       └─ Decision Engine (all 6 engines vote)                │
+  │    f. If active trade exists:                                 │
+  │       ├─ Update live PnL + R-multiple                         │
+  │       ├─ Trade Management Engine                              │
+  │       ├─ Exit Engine                                          │
+  │       ├─ State Machine (transition if needed)                 │
+  │       └─ If EXIT: archive to journal, clear active trade      │
+  │    g. Persist everything to DB                                │
+  │    h. Broadcast "odss:update" to all dashboards               │
+  └────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+  ┌────────────────────────────────────────────────────────────────┐
+  │ 3. DASHBOARD (browser)                                        │
+  │    use-odss.ts hook receives WebSocket events:                │
+  │    - "market:tick"  → updates prices, VIX, breadth            │
+  │    - "odss:update"  → updates market/sectors/opportunities/   │
+  │                       trade/recommendations/log               │
+  │    - "odss:snapshot" → full state on connect                  │
+  │    React re-renders only changed components                   │
+  └────────────────────────────────────────────────────────────────┘
+
+USER ACTIONS (via Socket.io emit + ack):
+  - "trade:enter"  → arms a trade (creates LiveTrade, state=ENTERED)
+  - "trade:exit"   → manually exits active trade
+  - "focus"        → streams option chain for a symbol
+  - "manual:scan"  → triggers an immediate scan
+  - "reset:simulator" → resets the market simulator
+
+
+================================================================================
+8. STATE MACHINE (TRADE LIFECYCLE)
+================================================================================
+
+File: src/lib/odss/state-machine.ts
+
+10 states, no shortcuts. Every transition requires explicit conditions.
+
+  WATCHLIST ──decision ENTER/WAIT──> READY
+       │                                 │
+       │                                 │ decision AVOID
+       │                                 ▼
+       │                              WATCHLIST
+       │
+       │ decision ENTER
+       ▼
+  WAITING_ENTRY ──entry triggered──> ENTERED
+       │                                 │
+       │ decision AVOID                  │ TP1 hit
+       ▼                                 ▼
+  WATCHLIST                          TP1 (SL → breakeven)
+                                         │
+                                         │ TP2 hit
+                                         ▼
+                                      TP2 (book 50%)
+                                         │
+                                         │ trail SL
+                                         ▼
+                                      TRAILING
+                                         │
+                                    ┌──────┴──────┐
+                                    │             │
+                              watch │             │ SL hit / exit
+                                    ▼             ▼
+                                 WEAKENING       EXIT ──> COMPLETE
+                                    │
+                                    │ full exit
+                                    ▼
+                                  EXIT ──> COMPLETE
+
+UNIVERSAL RULES:
+  - If SL hit at ANY state → EXIT immediately
+  - If Exit Engine signals EXIT at ANY state → EXIT
+  - Every transition is logged to trade.stateHistory[]
+  - State history is persisted and displayed in the dashboard timeline
+
+
+================================================================================
+9. DECISION ENGINE (HOW THE FINAL CALL IS MADE)
+================================================================================
+
+The Decision Engine is the heart of the system. It does NOT make decisions
+on its own — it aggregates votes from all other engines.
+
+VOTING MECHANISM:
+
+  Each engine produces a vote:  ENTER | WAIT | WATCH | AVOID
+  Each vote carries:
+    - weight    (from config, e.g., Technical = 25%)
+    - score     (0..100, how strong the signal is)
+    - confidence (0..100, how reliable the signal is)
+    - reason    (human-readable string)
+
+WEIGHTED AGGREGATION:
+
+  aggregate = Σ (vote_modifier × weight)
+
+  vote_modifier:
+    ENTER → +1.0 × weight
+    WAIT  → +0.4 × weight
+    WATCH → +0.1 × weight
+    AVOID → -1.5 × weight   (AVOID is penalized 1.5× because risk matters more)
+
+  DECISION THRESHOLDS:
+    aggregate >= 0.7  → ENTER   (strong consensus)
+    aggregate >= 0.4  → WAIT    (setup forming, wait for trigger)
+    aggregate >= 0.1  → WATCH   (on radar, not actionable)
+    aggregate  < 0.1  → AVOID   (signals conflicting or against)
+
+EXAMPLE:
+  Market:    ENTER  (weight 0.15) → +0.150
+  Sector:    WAIT   (weight 0.10) → +0.040
+  RS:        ENTER  (weight 0.10) → +0.100
+  Technical: ENTER  (weight 0.25) → +0.250
+  OptionChain: WAIT (weight 0.25) → +0.100
+  Risk:      ENTER  (weight 0.15) → +0.150
+  ──────────────────────────────────────────
+  aggregate = 0.790  →  DECISION: ENTER
+
+CONFIDENCE:
+  Weighted average of confidences from engines ALIGNED with the decision.
+  If decision is ENTER, only count engines that voted ENTER.
+  This ensures confidence reflects actual agreement, not just score.
+
+
+================================================================================
+10. AI EXPLANATION ENGINE
+================================================================================
+
+File: src/lib/odss/ai/explainer.ts
+
+CRITICAL RULE: AI NEVER decides. AI only EXPLAINS.
+
+The AI Explanation Engine uses the LLM skill (z-ai-web-dev-sdk) to produce
+plain-English explanations of the deterministic engine's decisions.
+
+THREE EXPLANATION MODES:
+
+  1. explainDecision(rec, 'SELECTED')
+     → "Why was this opportunity selected as a top pick?"
+     Inputs: full Recommendation object (all engine outputs)
+     Output: summary, whySelected[], riskNotes, coachingTip
+
+  2. explainDecision(rec, 'REJECTED')
+     → "Why was this opportunity rejected/deprioritized?"
+     Output: summary, whyRejected[], riskNotes, coachingTip
+
+  3. explainTradeManagement(trade, mgmt, exit)
+     → "Why is the engine recommending HOLD/TRAIL/EXIT?"
+     Inputs: live trade + management action + exit score
+     Output: summary, whyHolding[] or whyExiting[], riskNotes, coachingTip
+
+LLM CONFIGURATION:
+  - Model: z-ai-web-dev-sdk (backend only — never client-side)
+  - System prompt positions AI as "ODSS AI Coach" that explains, never decides
+  - User prompt includes the full deterministic engine output as context
+  - thinking: { type: 'disabled' } for fast responses
+  - Response parsed into structured bullets
+
+FALLBACK:
+  If the LLM is unavailable, deterministic templated explanations are
+  generated from the engine votes and facts. The system NEVER depends
+  on AI availability — the decision logic is 100% deterministic.
+
+USAGE IN DASHBOARD:
+  - "Why Selected" / "Why Rejected" buttons trigger POST /api/odss/explain
+  - Trade management explanations appear automatically in the Active Trade card
+  - AI Coach panel shows the latest explanation
+
+
+================================================================================
+11. TECHNOLOGY STACK
+================================================================================
+
+CORE FRAMEWORK (NON-NEGOTIABLE):
+  - Next.js 16 with App Router
+  - TypeScript 5 (strict typing throughout)
+
+FRONTEND:
+  - React 19
+  - Tailwind CSS 4
+  - shadcn/ui component library (New York style)
+  - Lucide icons
+  - Framer Motion (animations)
+  - Recharts (equity curve charts)
+  - Socket.io-client (real-time WebSocket)
+
+BACKEND:
+  - Next.js API Routes (REST mutations + DB queries)
+  - Bun runtime (for the mini-service)
+  - Socket.io (WebSocket server)
+
+DATABASE:
+  - Prisma ORM (SQLite provider)
+  - Prisma Client (query layer)
+
+AI:
+  - z-ai-web-dev-sdk (LLM for explanations — backend only)
+
+STATE MANAGEMENT:
+  - Custom Zustand-like store (in-memory, shared via Set of listeners)
+  - React hooks (useState + useEffect)
+  - No Redux needed — WebSocket drives state
+
+REAL-TIME:
+  - Socket.io (WebSocket) for live market + engine updates
+  - REST API for mutations and DB-backed queries
+
+INDICATORS LIBRARY (custom-built):
+  - EMA, SMA, RSI, ATR, ADX, VWAP, Bollinger Bands, Stochastic
+  - Pivot detection, level clustering, volume trend, linear regression
+  - All pure functions in src/lib/odss/indicators.ts
+
+
+================================================================================
+12. PROJECT FILE STRUCTURE
+================================================================================
+
+/home/z/my-project/
+│
+├── prisma/
+│   └── schema.prisma              ← Database schema (11 models)
+│
+├── src/
+│   ├── app/
+│   │   ├── layout.tsx             ← Root layout
+│   │   ├── page.tsx               ← Main dashboard (5 tabs)
+│   │   ├── globals.css
+│   │   └── api/
+│   │       └── odss/
+│   │           ├── state/         ← GET full ODSS snapshot
+│   │           ├── recommendation/[symbol]/  ← GET full recommendation
+│   │           ├── optionchain/[symbol]/     ← GET option chain
+│   │           ├── quote/[symbol]/           ← GET live quote
+│   │           ├── trade/enter/    ← POST arm a trade
+│   │           ├── trade/exit/     ← POST exit active trade
+│   │           ├── journal/        ← GET trade journal
+│   │           ├── analytics/      ← GET performance metrics
+│   │           ├── config/         ← GET/PUT configuration
+│   │           ├── explain/[symbol]/ ← POST AI explanation
+│   │           ├── log/            ← GET decision log
+│   │           └── reset/          ← POST reset simulator
+│   │
+│   ├── hooks/
+│   │   ├── use-odss.ts            ← Socket.io hook (live state)
+│   │   ├── use-toast.ts
+│   │   └── use-mobile.ts
+│   │
+│   ├── lib/
+│   │   ├── db.ts                  ← Prisma client
+│   │   ├── utils.ts               ← shadcn utility
+│   │   └── odss/
+│   │       ├── types.ts           ← ALL shared data models (Phase 1)
+│   │       ├── config.ts          ← Configuration system (Phase 21)
+│   │       ├── universe.ts        ← Indian market symbols + sectors
+│   │       ├── indicators.ts      ← Technical indicators library
+│   │       ├── state-machine.ts   ← 10-state trade lifecycle (Phase 15)
+│   │       ├── orchestrator.ts    ← Runs all engines in pipeline
+│   │       │
+│   │       ├── engines/
+│   │       │   ├── market-engine.ts           (Phase 3)
+│   │       │   ├── sector-engine.ts           (Phase 4)
+│   │       │   ├── relative-strength-engine.ts (Phase 5)
+│   │       │   ├── technical-engine.ts        (Phase 6)
+│   │       │   ├── option-chain-engine.ts     (Phase 7)
+│   │       │   ├── opportunity-engine.ts      (Phase 8)
+│   │       │   ├── strike-engine.ts           (Phase 9)
+│   │       │   ├── entry-engine.ts            (Phase 10)
+│   │       │   ├── risk-engine.ts             (Phase 11)
+│   │       │   ├── trade-management-engine.ts (Phase 12)
+│   │       │   ├── exit-engine.ts             (Phase 13)
+│   │       │   └── decision-engine.ts         (Phase 14)
+│   │       │
+│   │       ├── simulator/
+│   │       │   ├── market-simulator.ts  ← Synthetic data feed
+│   │       │   └── greeks.ts            ← Black-Scholes pricing
+│   │       │
+│   │       ├── ai/
+│   │       │   └── explainer.ts         ← AI Coach (Phase 16)
+│   │       │
+│   │       └── store/
+│   │           └── store.ts             ← In-memory state + DB persistence
+│   │
+│   └── components/
+│       ├── ui/                    ← shadcn/ui components (pre-installed)
+│       └── odss/
+│           ├── shared/
+│           │   └── badges.tsx     ← Trend/Bias/Decision/State badges
+│           ├── dashboard/
+│           │   ├── market-overview.tsx
+│           │   ├── sector-grid.tsx
+│           │   ├── opportunity-table.tsx
+│           │   ├── current-trade-card.tsx
+│           │   ├── engine-votes-panel.tsx
+│           │   ├── decision-log.tsx
+│           │   ├── ai-explainer.tsx
+│           │   └── recommendation-drawer.tsx
+│           ├── journal/
+│           │   └── journal-table.tsx
+│           ├── analytics/
+│           │   └── analytics-dashboard.tsx
+│           └── config/
+│               └── config-panel.tsx
+│
+├── mini-services/
+│   └── odss-market/               ← WebSocket mini-service
+│       ├── index.ts               ← Entry point (port 3002)
+│       ├── package.json
+│       ├── start.sh               ← Startup script
+│       └── service.log            ← Runtime log
+│
+├── db/
+│   └── custom.db                  ← SQLite database file
+│
+├── Caddyfile                      ← Gateway config (port routing)
+├── package.json
+├── tsconfig.json
+└── tailwind.config.ts
+
+
+================================================================================
+13. SERVICES & PORTS
+================================================================================
+
+┌──────────────────────────────────────────────────────────────────────┐
+│ SERVICE              │ PORT  │ PURPOSE                               │
+├──────────────────────┼───────┼───────────────────────────────────────┤
+│ Next.js App          │ 3000  │ Dashboard UI + REST API routes        │
+│ ODSS Market Service  │ 3002  │ WebSocket: simulator + engine scans   │
+│ Caddy Gateway        │ 81    │ Routes traffic, handles XTransformPort│
+└──────────────────────┴───────┴───────────────────────────────────────┘
+
+GATEWAY ROUTING (Caddyfile):
+  - Requests with ?XTransformPort=<port> are forwarded to that port
+  - All other requests go to port 3000 (Next.js)
+  - This allows the browser to connect to the WebSocket service via:
+      io("/?XTransformPort=3002")
+    instead of direct localhost connections
+
+STARTUP:
+  1. Next.js:    bun run dev   (port 3000, auto-restarts on file change)
+  2. Mini-service: bash mini-services/odss-market/start.sh  (port 3002)
+  3. Both run in background, log to files
+
+
+================================================================================
+14. DATABASE SCHEMA
+================================================================================
+
+File: prisma/schema.prisma  (SQLite via Prisma)
+
+11 MODELS:
+
+  1. MarketSnapshot        — OHLCV + VWAP + IV + PCR per symbol per timestamp
+  2. OptionChainSnapshot   — Per strike per type: LTP, OI, OI change, greeks
+  3. MarketStateSnapshot   — Market engine output (trend, score, VIX, breadth)
+  4. SectorSnapshot        — Sector rank, strength, momentum, leadership
+  5. Opportunity           — Ranked symbols with all engine scores
+  6. Recommendation        — Full trade plan (strike, entry, risk, decision)
+  7. TradeState            — Active trade (state machine + live values)
+  8. TradeJournal          — Completed trades (entry/exit/PnL/R-multiple)
+  9. PerformanceMetric     — Aggregated analytics (win rate, PF, etc.)
+  10. DecisionLog          — Every engine decision logged with timestamp
+  11. Configuration        — All weights/thresholds/risk settings (editable)
+
+SCHEMA COMMANDS:
+  - Edit prisma/schema.prisma
+  - Run: bun run db:push   (applies schema to SQLite)
+  - Run: bun run db:generate  (regenerates Prisma Client)
+
+
+================================================================================
+15. CONFIGURATION SYSTEM
+================================================================================
+
+File: src/lib/odss/config.ts
+
+ALL thresholds, weights, risk settings, scan intervals, and scoring
+parameters are configurable WITHOUT changing source code.
+
+CONFIGURABLE PARAMETERS:
+
+  ENGINE WEIGHTS (sum normalizes to 1.0):
+    weightMarket        0.15  (15%)
+    weightSector        0.10  (10%)
+    weightRS            0.10  (10%)
+    weightTechnical     0.25  (25%)
+    weightOptionChain   0.25  (25%)
+    weightRisk          0.15  (15%)
+
+  RISK SETTINGS:
+    riskPerTradePct     1.0   (% of capital risked per trade)
+    capital             200000 (₹)
+    lotSize             75    (NIFTY default)
+    minRR               2.0   (minimum reward:risk ratio)
+
+  CONFIDENCE THRESHOLDS:
+    minConfidenceEnter  65    (need 65%+ confidence to ENTER)
+    minConfidenceWait   45    (45%+ to WAIT)
+
+  SCAN:
+    scanIntervalMs      5000  (engine scan every 5 seconds)
+
+  VOLATILITY:
+    vixHigh             18    (VIX above this = HIGH volatility)
+    vixExtreme          25    (VIX above this = EXTREME)
+
+  TRADE MANAGEMENT:
+    trailATRMultiple    2.0   (trail SL at 2× ATR)
+    breakevenAtR        1.0   (move to breakeven at 1R profit)
+
+  PCR:
+    pcrBullish          1.2   (PCR above this = bullish)
+    pcrBearish          0.8   (PCR below this = bearish)
+
+  AI:
+    enableAIExplanation true   (toggle AI Coach on/off)
+
+STORAGE:
+  - Cached in memory (5s TTL) for fast access by engines
+  - Persisted to Configuration table in DB
+  - Editable via /api/odss/config (PUT) or the Config tab in the dashboard
+  - getConfigSync() for engines that need config without async
+
+
+================================================================================
+16. CREATIVE ENHANCEMENTS (BEYOND THE ORIGINAL SPEC)
+================================================================================
+
+These were added to make the system more powerful and insightful:
+
+1. BLACK-SCHOLES GREEKS ENGINE
+   - Computes Delta, Gamma, Theta, Vega, Rho for every option
+   - Uses the Abramowitz & Stegun normal CDF approximation
+   - IV smile applied (ATM lowest, wings higher)
+   - Enables accurate position sizing and risk estimation
+
+2. LIVE MARKET SIMULATOR WITH 6 REGIMES
+   - TRENDING_UP, TRENDING_DOWN, RANGING, CHOPPY, SELLOFF, RECOVERY
+   - Each regime has distinct drift + volatility + VIX behavior
+   - Regimes rotate every 30-100 ticks
+   - Stock beta multiplies market moves (TATASTEEL β=1.4, HINDUNILVR β=0.7)
+   - Sector biases assigned (some sectors lead, some lag)
+   - Seeded PRNG (mulberry32) for reproducibility
+
+3. ENGINE VOTING DASHBOARD
+   - Visualizes each engine's vote as a weighted bar
+   - Shows ENTER (green) / WAIT (amber) / WATCH (blue) / AVOID (red)
+   - Displays weight %, score, confidence, and reason per engine
+   - Weighted aggregate bar shows the decision visually
+
+4. TRADE LIFECYCLE TIMELINE
+   - 10-segment progress bar showing the trade's state journey
+   - Reached states = green, current state = black, future = gray
+   - Helps traders see where they are in the trade lifecycle
+
+5. RISK/REWARD VISUAL BAR
+   - Horizontal bar with SL (red), Entry (gray), TP1/TP2/TP3 (green) markers
+   - Live price marker (black) moves as the underlying ticks
+   - Instant visual of where price is relative to targets
+
+6. CONFIDENCE METER
+   - Circular SVG gauge (0-100)
+   - Color-coded: green > 70, amber > 45, red < 45
+   - Animated transitions
+
+7. MULTI-FACTOR DECISION AGGREGATION
+   - Not just "majority wins" — weighted voting with AVOID penalty
+   - AVOID votes count 1.5× (risk-averse by design)
+   - Confidence reflects actual alignment, not just score
+
+8. LIVE DECISION TAPE
+   - Real-time streaming log of every engine decision
+   - Timestamped with engine name + symbol + message
+   - Color-coded by level (INFO/WARN/ERROR/DECISION)
+   - Shows the system "thinking" in real time
+
+9. AI COACH WITH LLM
+   - Explains WHY in plain English
+   - Structured output: summary, why selected/rejected, risk notes, tip
+   - Deterministic fallback if LLM unavailable
+
+10. OPTION CHAIN VIEWER WITH OI HEATMAP
+    - Calls and puts side-by-side per strike
+    - OI, OI change, IV, LTP for each
+    - ATM row highlighted
+    - Color-coded OI change (green = increasing, red = decreasing)
+
+
+================================================================================
+17. HOW TO RUN IT
+================================================================================
+
+PREREQUISITES:
+  - Node.js 18+ or Bun runtime
+  - The project is already initialized at /home/z/my-project/
+
+START THE DASHBOARD:
+  cd /home/z/my-project
+  bun run dev
+  → Next.js starts on port 3000
+  → Open via the Preview Panel (NOT localhost:3000 directly)
+
+START THE WEBSOCKET SERVICE:
+  bash /home/z/my-project/mini-services/odss-market/start.sh
+  → Mini-service starts on port 3002
+  → Logs to mini-services/odss-market/service.log
+
+RESET THE DATABASE (if needed):
+  bun run db:push
+
+LINT CHECK:
+  bun run lint
+
+VIEW DEV LOG:
+  tail -f /home/z/my-project/dev.log
+
+VIEW MINI-SERVICE LOG:
+  tail -f /home/z/my-project/mini-services/odss-market/service.log
+
+
+================================================================================
+18. HOW TO EXTEND IT (CONNECTING REAL BROKER DATA)
+================================================================================
+
+The architecture is deliberately decoupled so you can swap the simulator
+for a real broker feed WITHOUT touching any engine.
+
+CURRENT DATA SOURCE:
+  src/lib/odss/simulator/market-simulator.ts
+  → Synthetic feed (no broker connection)
+
+TO CONNECT REAL DATA:
+
+  STEP 1: Choose a broker API
+    Options for Indian market:
+    - Zerodha Kite Connect (most popular, ₹2000/month)
+    - Upstox API v2 (free historical data)
+    - Angel One SmartAPI (free, WebSocket ticks)
+    - NSE official bulk feed (enterprise, paid)
+
+  STEP 2: Create a data provider
+    // src/lib/odss/data-providers/kite-provider.ts
+    import KiteConnect from 'kiteconnect';
+
+    export class KiteProvider {
+      private kc = new KiteConnect({ api_key: process.env.KITE_API_KEY });
+
+      async getQuote(symbol: string): Promise<Quote> {
+        // Fetch real LTP, OHLC, volume from Kite
+        // Map to the Quote interface in types.ts
+      }
+
+      async getOptionChain(symbol: string): Promise<OptionChain> {
+        // Fetch real OI, IV, LTP, bid/ask from Kite
+        // Map to the OptionChain interface in types.ts
+        // Greeks can be computed via greeks.ts or taken from broker
+      }
+    }
+
+  STEP 3: Replace simulator calls in the mini-service
+    // mini-services/odss-market/index.ts
+    // Change:
+    import { getQuote, getOptionChain } from '../../src/lib/odss/simulator/market-simulator';
+    // To:
+    import { KiteProvider } from '../../src/lib/odss/data-providers/kite-provider';
+    const provider = new KiteProvider();
+    // Use provider.getQuote() instead of getQuote()
+
+  STEP 4: Remove the tick loop
+    The simulator needs ticking (it generates data).
+    A real feed doesn't need ticking — you subscribe to WebSocket ticks.
+    Replace the tick interval with a Kite ticker subscription.
+
+  STEP 5: Keep everything else unchanged
+    - All 12 engines work unchanged (they consume typed interfaces)
+    - State machine works unchanged
+    - AI Coach works unchanged
+    - Dashboard works unchanged
+    - Database persistence works unchanged
+
+ENVIRONMENT VARIABLES NEEDED:
+  KITE_API_KEY=your_api_key
+  KITE_API_SECRET=your_api_secret
+  KITE_ACCESS_TOKEN=your_access_token  (from login flow)
+
+
+================================================================================
+19. KEY DESIGN PRINCIPLES ENFORCED
+================================================================================
+
+1. MODULAR ARCHITECTURE
+   - Each engine = one file, one responsibility
+   - Engines communicate only through types.ts interfaces
+   - No engine imports another engine's internal logic
+   - Orchestrator is the ONLY place engines are called together
+
+2. DETERMINISTIC DECISION LOGIC
+   - All engines are pure functions (same input → same output)
+   - No Math.random() in engines (only in simulator, which is seeded)
+   - Decisions are reproducible — same market state → same recommendation
+   - Backtesting uses the SAME decision logic as live mode
+
+3. UNDERLYING-DRIVEN ENTRIES AND EXITS
+   - Entry price = underlying price target (not option premium)
+   - Stop loss = underlying price (not option premium)
+   - Targets = underlying price levels
+   - Option premium only used for position sizing and PnL tracking
+
+4. EXPLAIN EVERY RECOMMENDATION
+   - Every engine outputs a facts[] array (human-readable)
+   - Decision Engine outputs reasoning + votes[] with per-engine reasons
+   - AI Coach generates plain-English explanations
+   - Decision Log persists every decision with timestamp
+
+5. EVENT-DRIVEN TRADE MANAGEMENT
+   - State transitions only on explicit conditions
+   - No polling-based exits
+   - Management actions (trail, breakeven, partial exit) are events
+
+6. COMPLETE LOGGING
+   - Every engine decision logged to DecisionLog table
+   - Every state transition logged to trade.stateHistory[]
+   - Every completed trade archived to TradeJournal
+
+7. REPLAY CAPABILITY
+   - All snapshots persisted with timestamps
+   - Market state, sector state, option chains, recommendations all stored
+   - Can replay any historical moment decision-by-decision
+
+8. NO AUTO EXECUTION
+   - User must explicitly arm a trade ("Arm Entry" button)
+   - User can manually exit at any time
+   - System recommends; human executes
+
+9. HUMAN REMAINS FINAL DECISION MAKER
+   - System provides analysis + recommendation + explanation
+   - User reviews and decides
+   - No orders are ever placed automatically
+
+10. BUILD FOR MAINTAINABILITY, SCALABILITY, FUTURE ENHANCEMENTS
+    - Configuration via DB (no code changes for tuning)
+    - Pure functions for easy unit testing
+    - Typed interfaces for safe refactoring
+    - Mini-service architecture allows scaling engines separately
+
+
+================================================================================
+20. GLOSSARY
+================================================================================
+
+ATM     At-The-Money (strike closest to spot price)
+ATR     Average True Range (volatility measure)
+CE      Call Option (European) — bullish direction
+Delta   Rate of change of option price vs underlying
+EMA     Exponential Moving Average
+ITM     In-The-Money (has intrinsic value)
+IV      Implied Volatility
+Max Pain Strike that minimizes total option holder loss at expiry
+OI      Open Interest (number of outstanding contracts)
+OTM     Out-of-The-Money (no intrinsic value)
+PCR     Put-Call Ratio (OI-based) — >1.2 bullish, <0.8 bearish
+PE      Put Option (European) — bearish direction
+R       Risk multiple (profit/loss expressed in units of initial risk)
+RR      Reward:Risk ratio
+RSI     Relative Strength Index (momentum oscillator, 0-100)
+RS      Relative Strength (stock vs sector vs market)
+SL      Stop Loss
+TP      Take Profit (TP1, TP2, TP3 = progressive targets)
+VIX     Volatility Index (India VIX measures NIFTY option implied vol)
+VWAP    Volume-Weighted Average Price
+
+REGIME  Market condition (trending up/down, ranging, choppy, selloff, recovery)
+BREADTH Number of advancing vs declining stocks
+GREEKS  Delta, Gamma, Theta, Vega, Rho — option risk metrics
+BLACK-SCHOLES  Mathematical model for option pricing
+
+NIFTY       NSE Nifty 50 Index
+BANKNIFTY   NSE Nifty Bank Index
+FINNIFTY    NSE Nifty Financial Services Index
+MIDCPNIFTY  NSE Nifty Midcap Select Index
+
+F&O     Futures & Options segment
+NSE     National Stock Exchange of India
+LOT     Standardized quantity for options trading (e.g., NIFTY lot = 75)
+STRIKE  Pre-defined price level for an option contract
+
+
+================================================================================
+END OF DOCUMENT
+================================================================================
+
+For questions or extensions, refer to:
+  - Source code: /home/z/my-project/src/lib/odss/
+  - Dashboard:   /home/z/my-project/src/app/page.tsx
+  - Mini-service: /home/z/my-project/mini-services/odss-market/
+  - Database:    /home/z/my-project/prisma/schema.prisma
+
+— ODSS Engine v1.0 | Built for the Indian Options Market —
