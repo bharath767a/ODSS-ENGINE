@@ -1,0 +1,2196 @@
+================================================================================
+  ODSS — TRADING INTELLIGENCE RULEBOOK
+  The Exact Rules, Thresholds, and Decision Math for Every Engine
+  Version 1.0 | Companion to the Architecture Document
+================================================================================
+
+  HOW TO USE THIS BOOK
+  ────────────────────
+  This is the single source of truth for HOW each engine thinks.
+  The Architecture Document answers: "What components exist?"
+  This Rulebook answers:     "Exactly how does each component think?"
+
+  Every rule here is:
+    - Deterministic  (same input → same output, always)
+    - Unambiguous    (no room for developer interpretation)
+    - Configurable   (thresholds live in the Configuration table,
+                      but the DEFAULT values are defined here)
+    - Testable       (each rule can be unit tested in isolation)
+
+  If the code and this book disagree, THIS BOOK IS CORRECT.
+  Fix the code to match the book.
+
+
+================================================================================
+  TABLE OF CONTENTS
+================================================================================
+
+  BOOK 1  — MARKET STATE RULES
+    1.1   Trend Classification
+    1.2   Structure Classification
+    1.3   Momentum Calculation
+    1.4   Volatility Classification
+    1.5   Day Type Classification
+    1.6   Market Bias
+    1.7   Opening Range
+    1.8   Market State
+    1.9   Market Score
+    1.10  Market Confidence
+
+  BOOK 2  — SECTOR RULES
+    2.1   Sector Strength
+    2.2   Sector Momentum
+    2.3   Sector Leadership
+    2.4   Sector Score
+    2.5   Sector Rank
+
+  BOOK 3  — RELATIVE STRENGTH RULES
+    3.1   RS vs NIFTY
+    3.2   RS vs Sector
+    3.3   RS Score
+    3.4   RS Leadership
+    3.5   RS Rank
+
+  BOOK 4  — TECHNICAL RULES
+    4.1   EMA Alignment
+    4.2   VWAP Position
+    4.3   Trend (per-symbol)
+    4.4   ATR and ATR%
+    4.5   RSI
+    4.6   ADX
+    4.7   Stochastic
+    4.8   Support and Resistance
+    4.9   Breakout Detection
+    4.10  Pullback Detection
+    4.11  Volume Structure
+    4.12  Liquidity Sweep
+    4.13  Technical Score
+
+  BOOK 5  — OPTION CHAIN RULES
+    5.1   PCR Signal
+    5.2   IV Skew
+    5.3   IV Rank
+    5.4   Call Writing Trend
+    5.5   Put Writing Trend
+    5.6   Unwinding Detection
+    5.7   Support and Resistance Strikes
+    5.8   Max Pain
+    5.9   Liquidity (Spread)
+    5.10  Expected Move
+    5.11  Option Chain Bias
+    5.12  Option Chain Score
+
+  BOOK 6  — OPPORTUNITY RULES
+    6.1   Direction Selection (CE vs PE)
+    6.2   Per-Engine Score Alignment
+    6.3   Total Score
+    6.4   Confidence
+    6.5   Ranking
+
+  BOOK 7  — STRIKE SELECTION RULES
+    7.1   Conviction Tiers
+    7.2   Strike Selection by Conviction
+    7.3   Liquidity Filter
+    7.4   Alternative and Aggressive Strikes
+
+  BOOK 8  — ENTRY RULES
+    8.1   Entry Priority
+    8.2   Breakout Entry
+    8.3   Retest Entry
+    8.4   VWAP Entry
+    8.5   Liquidity Sweep Entry
+    8.6   Fallback (No-Chase) Entry
+    8.7   Stop-Loss Calculation
+
+  BOOK 9  — RISK RULES
+    9.1   Risk Distance (R)
+    9.2   Target Calculation (TP1, TP2, TP3)
+    9.3   Reward:Risk Ratio
+    9.4   Position Sizing
+    9.5   Max Loss
+    9.6   Max Profit
+    9.7   Risk Veto Conditions
+
+  BOOK 10 — DECISION RULES
+    10.1  Engine Vote Generation
+    10.2  Weighted Aggregation
+    10.3  Decision Thresholds
+    10.4  Confidence Calculation
+    10.5  AVOID Penalty
+
+  BOOK 11 — TRADE MANAGEMENT RULES
+    11.1  R-Multiple Calculation
+    11.2  Move to Breakeven
+    11.3  Trail Stop-Loss
+    11.4  Partial Exit (TP2)
+    11.5  Full Exit (Management)
+    11.6  Watch (Weakening)
+    11.7  Hold
+
+  BOOK 12 — EXIT RULES
+    12.1  Exit Score Components
+    12.2  Exit Score Calculation
+    12.3  Exit Action Thresholds
+    12.4  No-Single-Indicator Rule
+
+  BOOK 13 — STATE MACHINE RULES
+    13.1  States
+    13.2  Transitions
+    13.3  Universal Exit Triggers
+
+  BOOK 14 — AI EXPLANATION RULES
+    14.1  AI Never Decides
+    14.2  Explanation Inputs
+    14.3  Explanation Modes
+    14.4  Grounding Rules
+    14.5  Fallback
+
+  BOOK 15 — CONFIGURATION DEFAULTS
+    15.1  Engine Weights
+    15.2  Risk Settings
+    15.3  Thresholds
+    15.4  Trade Management
+    15.5  Option Chain
+    15.6  Volatility
+
+
+================================================================================
+  BOOK 1 — MARKET STATE RULES
+  (Phase 3: Market Engine)
+================================================================================
+
+  INPUT:  NIFTY 1-min candles, BANKNIFTY quote, India VIX, Market Breadth
+  OUTPUT: trend, structure, momentum, volatility, dayType, bias,
+          marketScore (-100..100), marketConfidence (0..100), marketState
+
+
+──────────────────────────────────────────────────────────────────────────────
+1.1  TREND CLASSIFICATION
+──────────────────────────────────────────────────────────────────────────────
+
+  Computes EMA(9), EMA(21), EMA(50) on NIFTY closing prices.
+  Computes linear regression slope over last 20 closes.
+
+  RULE:
+    IF EMA9 > EMA21  AND  EMA21 > EMA50  AND  slope > 0
+      THEN trend = BULLISH
+
+    ELSE IF EMA9 < EMA21  AND  EMA21 < EMA50  AND  slope < 0
+      THEN trend = BEARISH
+
+    ELSE
+      trend = NEUTRAL
+
+  NOTE: All three EMAs must be stacked AND slope must confirm.
+        Partial stacking = NEUTRAL.
+
+
+──────────────────────────────────────────────────────────────────────────────
+1.2  STRUCTURE CLASSIFICATION
+──────────────────────────────────────────────────────────────────────────────
+
+  recentHigh = highest high of last 30 candles
+  recentLow  = lowest low of last 30 candles
+
+  RULE:
+    IF price >= recentHigh × 0.998  AND  trend = BULLISH
+      THEN structure = BREAKOUT
+
+    ELSE IF price <= recentLow × 1.002  AND  trend = BEARISH
+      THEN structure = BREAKDOWN
+
+    ELSE IF trend = BULLISH
+      THEN structure = UPTREND
+
+    ELSE IF trend = BEARISH
+      THEN structure = DOWNTREND
+
+    ELSE
+      structure = RANGE
+
+  REVERSAL OVERRIDE:
+    If slope sign disagrees with trend direction
+    (e.g., trend = BULLISH but slope < 0),
+    AND structure is not RANGE,
+    THEN structure = REVERSAL
+
+
+──────────────────────────────────────────────────────────────────────────────
+1.3  MOMENTUM CALCULATION
+──────────────────────────────────────────────────────────────────────────────
+
+  slopePct  = (linregSlope(closes, 20) / price) × 100
+  changePct = NIFTY daily change %
+
+  RULE:
+    momentum = clamp( slopePct × 800  +  changePct × 10 ,  -100 ,  +100 )
+
+  INTERPRETATION:
+    momentum > +50  → strong bullish momentum
+    momentum +20..+50 → moderate bullish
+    momentum -20..+20 → neutral
+    momentum -50..-20 → moderate bearish
+    momentum < -50  → strong bearish
+
+
+──────────────────────────────────────────────────────────────────────────────
+1.4  VOLATILITY CLASSIFICATION (from India VIX)
+──────────────────────────────────────────────────────────────────────────────
+
+  RULE (defaults, configurable):
+    IF VIX < 12.0        THEN volatility = LOW
+    ELSE IF VIX < 18.0   THEN volatility = NORMAL     (config: vixHigh)
+    ELSE IF VIX < 25.0   THEN volatility = HIGH       (config: vixExtreme)
+    ELSE                  THEN volatility = EXTREME
+
+
+──────────────────────────────────────────────────────────────────────────────
+1.5  DAY TYPE CLASSIFICATION
+──────────────────────────────────────────────────────────────────────────────
+
+  changePct = NIFTY daily change %
+  orHigh    = Opening Range high (first 15 min)
+  orLow     = Opening Range low  (first 15 min)
+  candleCount = number of 1-min candles so far today
+
+  RULE:
+    IF changePct > +0.8%  AND  price > orHigh
+      THEN dayType = TREND            (strong trend day, breaking OR high)
+
+    ELSE IF changePct > +0.8%
+      THEN dayType = GAP_UP           (gapped up but not breaking OR)
+
+    ELSE IF changePct < -0.8%  AND  price < orLow
+      THEN dayType = TREND            (strong trend day, breaking OR low)
+
+    ELSE IF changePct < -0.8%
+      THEN dayType = GAP_DOWN         (gapped down but not breaking OR)
+
+    ELSE IF |changePct| < 0.2%  AND  candleCount > 30
+      THEN dayType = RANGE            (flat, range-bound day)
+
+    ELSE
+      dayType = TREND                 (default to trend for moderate moves)
+
+
+──────────────────────────────────────────────────────────────────────────────
+1.6  MARKET BIAS
+──────────────────────────────────────────────────────────────────────────────
+
+  RULE:
+    IF price > VWAP  AND  trend = BULLISH  AND  breadth A/D ratio > 1.0
+      THEN bias = LONG
+
+    ELSE IF price < VWAP  AND  trend = BEARISH  AND  breadth A/D ratio < 1.0
+      THEN bias = SHORT
+
+    ELSE
+      bias = NEUTRAL
+
+  NOTE: All three conditions must be true simultaneously.
+        Bias is the directional conviction of the market engine.
+
+
+──────────────────────────────────────────────────────────────────────────────
+1.7  OPENING RANGE
+──────────────────────────────────────────────────────────────────────────────
+
+  orCandles = first 15 one-minute candles of the day
+  orHigh    = max(high of orCandles, day open)
+  orLow     = min(low of orCandles, day open)
+
+  RULE:
+    IF candleCount >= 15
+      THEN orStatus = SET
+    ELSE
+      orStatus = FORMING
+
+  USAGE:
+    - OR high/low are key intraday levels
+    - Break above OR high after 10:00 = bullish breakout trigger
+    - Break below OR low after 10:00 = bearish breakout trigger
+
+
+──────────────────────────────────────────────────────────────────────────────
+1.8  MARKET STATE
+──────────────────────────────────────────────────────────────────────────────
+
+  Derived from the underlying market regime (provided by the data feed).
+
+  RULE:
+    regime = TRENDING_UP  → marketState = TRENDING_UP
+    regime = RECOVERY     → marketState = TRENDING_UP
+    regime = TRENDING_DOWN → marketState = TRENDING_DOWN
+    regime = SELLOFF      → marketState = SELLING_OFF
+    regime = CHOPPY       → marketState = CHOPPY
+    regime = RANGING      → marketState = RANGING
+    else                  → marketState = FLAT
+
+
+──────────────────────────────────────────────────────────────────────────────
+1.9  MARKET SCORE  (−100 to +100)
+──────────────────────────────────────────────────────────────────────────────
+
+  Aggregates 6 components. Positive = bullish, negative = bearish.
+
+  COMPONENTS:
+    +25  if trend = BULLISH
+    -25  if trend = BEARISH
+     0   if trend = NEUTRAL
+
+    +20  if structure = UPTREND or BREAKOUT
+    -20  if structure = DOWNTREND or BREAKDOWN
+     0   otherwise
+
+    +15  if bias = LONG
+    -15  if bias = SHORT
+     0   if bias = NEUTRAL
+
+    +clamp(momentum × 0.15, −15, +15)   (scaled momentum contribution)
+
+    +10  if breadth A/D ratio > 1.5
+    -10  if breadth A/D ratio < 0.67
+     0   otherwise
+
+    +5   if BANKNIFTY changePct > +0.3%
+    -5   if BANKNIFTY changePct < -0.3%
+     0   otherwise
+
+  FINAL:
+    marketScore = clamp(sum, −100, +100)
+
+  EXAMPLE (bullish alignment):
+    trend BULLISH (+25) + structure UPTREND (+20) + bias LONG (+15)
+    + momentum 40 → +6 + breadth A/D 1.8 → +10 + BANKNIFTY +0.5% → +5
+    = 81  →  marketScore = +81
+
+
+──────────────────────────────────────────────────────────────────────────────
+1.10  MARKET CONFIDENCE  (0 to 100)
+──────────────────────────────────────────────────────────────────────────────
+
+  Measures how aligned the 5 directional signals are.
+
+  SIGNALS (each is +1 bullish, −1 bearish, 0 neutral):
+    S1 = sign(trend)           (BULLISH=+1, BEARISH=-1, NEUTRAL=0)
+    S2 = sign(bias)            (LONG=+1, SHORT=-1, NEUTRAL=0)
+    S3 = BANKNIFTY changePct > 0 ? +1 : −1
+    S4 = breadth A/D ratio > 1.0 ? +1 : −1
+    S5 = momentum > 0 ? +1 : −1
+
+  CALCULATION:
+    avg = (S1 + S2 + S3 + S4 + S5) / 5          (range: −1 to +1)
+    confidence = min(100, |avg| × 100 × 0.6 + |marketScore| × 0.4)
+
+  INTERPRETATION:
+    - All 5 signals aligned (avg = ±1) + |marketScore| = 100
+      → confidence = 60 + 40 = 100
+    - 3 aligned, 2 against (avg = +0.2) + marketScore = 40
+      → confidence = 12 + 16 = 28
+
+
+================================================================================
+  BOOK 2 — SECTOR RULES
+  (Phase 4: Sector Engine)
+================================================================================
+
+  INPUT:  All stock quotes grouped by sector (8 sectors)
+  OUTPUT: Ranked list of sectors with strength, momentum, leadership, score
+
+
+──────────────────────────────────────────────────────────────────────────────
+2.1  SECTOR STRENGTH  (−100 to +100)
+──────────────────────────────────────────────────────────────────────────────
+
+  For each sector:
+    avgChange = mean(changePct of all stocks in sector)
+
+  RULE:
+    strength = clamp(avgChange × 25, −100, +100)
+
+  EXAMPLE:
+    avgChange = +1.2%  →  strength = +30
+    avgChange = -2.0%  →  strength = -50
+
+
+──────────────────────────────────────────────────────────────────────────────
+2.2  SECTOR MOMENTUM  (−100 to +100)
+──────────────────────────────────────────────────────────────────────────────
+
+  advancers = count of stocks in sector with changePct > 0
+  decliners = count of stocks in sector with changePct < 0
+  breadth   = advancers / max(advancers + decliners, 1)
+
+  RULE:
+    momentum = clamp(avgChange × 20 + (breadth − 0.5) × 60, −100, +100)
+
+  NOTE: Combines magnitude (avgChange) with participation (breadth).
+        A sector where 1 stock is up 5% but 9 are flat has lower
+        momentum than a sector where all 10 stocks are up 0.5%.
+
+
+──────────────────────────────────────────────────────────────────────────────
+2.3  SECTOR LEADERSHIP
+──────────────────────────────────────────────────────────────────────────────
+
+  vsNifty = sector avgChange − NIFTY changePct
+
+  RULE:
+    IF vsNifty > +0.3%  AND  avgChange > 0
+      THEN leadership = LEADING
+
+    ELSE IF vsNifty < −0.3%  AND  avgChange < 0
+      THEN leadership = LAGGING
+
+    ELSE
+      leadership = MIXED
+
+
+──────────────────────────────────────────────────────────────────────────────
+2.4  SECTOR SCORE  (0 to 100)
+──────────────────────────────────────────────────────────────────────────────
+
+  RULE:
+    score = clamp(50 + strength × 0.5, 0, 100)
+
+  NOTE: Neutral sector = 50. Bullish sector with strength +60 → score 80.
+
+
+──────────────────────────────────────────────────────────────────────────────
+2.5  SECTOR RANK
+──────────────────────────────────────────────────────────────────────────────
+
+  RULE:
+    Sort all sectors by score DESCENDING.
+    Assign rank 1 (strongest) to N (weakest).
+
+
+================================================================================
+  BOOK 3 — RELATIVE STRENGTH RULES
+  (Phase 5: Relative Strength Engine)
+================================================================================
+
+  INPUT:  All stock quotes + sector averages + NIFTY
+  OUTPUT: Ranked list of stocks with RS score and within-sector rank
+
+
+──────────────────────────────────────────────────────────────────────────────
+3.1  RS vs NIFTY
+──────────────────────────────────────────────────────────────────────────────
+
+  vsNifty = stock changePct − NIFTY changePct
+
+  EXAMPLE:
+    Stock +1.5%, NIFTY +0.5%  →  vsNifty = +1.0%  (outperforming)
+    Stock -0.5%, NIFTY +0.5%  →  vsNifty = -1.0%  (underperforming)
+
+
+──────────────────────────────────────────────────────────────────────────────
+3.2  RS vs SECTOR
+──────────────────────────────────────────────────────────────────────────────
+
+  vsSector = stock changePct − sector avgChange
+
+  EXAMPLE:
+    Stock +2.0%, Sector avg +0.8%  →  vsSector = +1.2% (sector leader)
+
+
+──────────────────────────────────────────────────────────────────────────────
+3.3  RS SCORE  (−100 to +100)
+──────────────────────────────────────────────────────────────────────────────
+
+  RULE:
+    rsScore = clamp(vsNifty × 25 + vsSector × 15, −100, +100)
+
+  EXAMPLE:
+    vsNifty = +1.5%, vsSector = +0.8%
+    rsScore = 37.5 + 12 = +49.5  →  strong relative strength
+
+    vsNifty = -1.0%, vsSector = -0.5%
+    rsScore = -25 - 7.5 = -32.5  →  weak relative strength
+
+
+──────────────────────────────────────────────────────────────────────────────
+3.4  RS LEADERSHIP
+──────────────────────────────────────────────────────────────────────────────
+
+  RULE:
+    IF rsScore > +15  THEN leadership = STRONG
+    IF rsScore < −15  THEN leadership = WEAK
+    ELSE              leadership = NEUTRAL
+
+
+──────────────────────────────────────────────────────────────────────────────
+3.5  RS RANK
+──────────────────────────────────────────────────────────────────────────────
+
+  Within each sector, sort stocks by rsScore DESCENDING.
+  Rank 1 = strongest stock in the sector.
+
+  Also produces a global sort (all stocks) by rsScore for cross-sector ranking.
+
+
+================================================================================
+  BOOK 4 — TECHNICAL RULES
+  (Phase 6: Technical Engine)
+================================================================================
+
+  INPUT:  1-min intraday candles for a single symbol
+  OUTPUT: Trend, EMAs, VWAP position, ATR, RSI, ADX, Stochastic,
+          S/R levels, breakout, pullback, volume, liquidity sweep, score
+
+  PRINCIPLE: Output only TECHNICAL FACTS. No opinions.
+
+
+──────────────────────────────────────────────────────────────────────────────
+4.1  EMA ALIGNMENT
+──────────────────────────────────────────────────────────────────────────────
+
+  Compute EMA(9), EMA(21), EMA(50) on closing prices.
+
+  RULE:
+    IF EMA9 > EMA21  AND  EMA21 > EMA50
+      THEN emaAlignment = BULLISH    (stacked bullish)
+
+    ELSE IF EMA9 < EMA21  AND  EMA21 < EMA50
+      THEN emaAlignment = BEARISH    (stacked bearish)
+
+    ELSE
+      emaAlignment = MIXED
+
+
+──────────────────────────────────────────────────────────────────────────────
+4.2  VWAP POSITION
+──────────────────────────────────────────────────────────────────────────────
+
+  dayVwap = volume-weighted average price for the day
+  vwapDiff = (price − dayVwap) / dayVwap
+
+  RULE:
+    IF vwapDiff > +0.05%   THEN vwapPosition = ABOVE
+    IF vwapDiff < −0.05%   THEN vwapPosition = BELOW
+    ELSE                    vwapPosition = AT
+
+
+──────────────────────────────────────────────────────────────────────────────
+4.3  TREND (per-symbol)
+──────────────────────────────────────────────────────────────────────────────
+
+  Combines EMA alignment, slope, and VWAP.
+
+  RULE:
+    IF emaAlignment = BULLISH  AND  slope > 0  AND  price > VWAP
+      THEN trend = BULLISH
+
+    ELSE IF emaAlignment = BEARISH  AND  slope < 0  AND  price < VWAP
+      THEN trend = BEARISH
+
+    ELSE
+      trend = NEUTRAL
+
+  NOTE: Stricter than market trend — requires ALL THREE confirmations.
+
+
+──────────────────────────────────────────────────────────────────────────────
+4.4  ATR AND ATR%
+──────────────────────────────────────────────────────────────────────────────
+
+  atr = EMA of True Range over 14 periods
+  True Range = max(high−low, |high−prevClose|, |low−prevClose|)
+  atrPct = (atr / price) × 100
+
+  USAGE:
+    - ATR determines stop-loss distance (see Book 8.7)
+    - ATR% > 1.5% = high volatility stock
+    - ATR% < 0.5% = low volatility (avoid for day trading)
+
+
+──────────────────────────────────────────────────────────────────────────────
+4.5  RSI  (14-period)
+──────────────────────────────────────────────────────────────────────────────
+
+  Standard Wilder's RSI on closing prices.
+
+  INTERPRETATION:
+    RSI > 70  → overbought (potential reversal risk for longs)
+    RSI 60-70 → bullish momentum
+    RSI 40-60 → neutral
+    RSI 30-40 → bearish momentum
+    RSI < 30  → oversold (potential reversal risk for shorts)
+
+
+──────────────────────────────────────────────────────────────────────────────
+4.6  ADX  (14-period)
+──────────────────────────────────────────────────────────────────────────────
+
+  Standard ADX (trend strength, direction-agnostic).
+
+  INTERPRETATION:
+    ADX < 15   → no trend (range-bound)
+    ADX 15-25  → weak trend
+    ADX 25-35  → trending
+    ADX 35-50  → strong trend
+    ADX > 50   → extremely strong (may be exhausted)
+
+  USAGE:
+    - ADX < 20  → technical score penalty (trend not strong enough)
+    - ADX > 25  → required for BREAKOUT entry (see Book 8.2)
+
+
+──────────────────────────────────────────────────────────────────────────────
+4.7  STOCHASTIC  (14, 3)
+──────────────────────────────────────────────────────────────────────────────
+
+  %K = ((close − lowestLow(14)) / (highestHigh(14) − lowestLow(14))) × 100
+  %D = SMA(%K, 3)
+
+  INTERPRETATION:
+    %K > 80           → overbought
+    %K < 20           → oversold
+    %K crosses above %D → bullish signal (in momentum zone)
+    %K crosses below %D → bearish signal (in momentum zone)
+
+
+──────────────────────────────────────────────────────────────────────────────
+4.8  SUPPORT AND RESISTANCE
+──────────────────────────────────────────────────────────────────────────────
+
+  STEP 1: Find pivot highs and pivot lows.
+    A pivot high = a candle whose high is higher than `lookback` candles
+                   on each side (default lookback = 3).
+    A pivot low  = a candle whose low is lower than `lookback` candles
+                   on each side.
+
+  STEP 2: Cluster nearby levels.
+    Group levels within 0.3% tolerance of each other.
+    Each cluster → a single S/R level (average of cluster members).
+
+  STEP 3: Sort.
+    resistance = top 3 pivot-high clusters (descending)
+    support    = top 3 pivot-low clusters (descending)
+
+  STEP 4: Add day high/low.
+    If dayHigh > highest resistance, prepend it.
+    If dayLow < lowest support, append it.
+
+  OUTPUT:
+    resistance[0..2]  (nearest resistance first)
+    support[0..2]     (nearest support first)
+
+
+──────────────────────────────────────────────────────────────────────────────
+4.9  BREAKOUT DETECTION
+──────────────────────────────────────────────────────────────────────────────
+
+  lastResistance = resistance[0]  (nearest overhead resistance)
+  lastSupport    = support[support.length − 1]  (nearest downside support)
+
+  RULE:
+    IF |price − lastResistance| / lastResistance < 0.15%
+       AND price >= lastResistance × 0.999
+       AND price <= lastResistance × 1.0015
+      THEN breakout.status = BREAKING_OUT
+           breakout.level  = lastResistance
+
+    ELSE IF |price − lastSupport| / lastSupport < 0.15%
+       AND price <= lastSupport × 1.001
+       AND price >= lastSupport × 0.9985
+      THEN breakout.status = BREAKING_DOWN
+           breakout.level  = lastSupport
+
+    ELSE
+      breakout.status = NONE
+
+  NOTE: This detects price TESTING a level, not the actual breakout.
+        The breakout is confirmed when price closes beyond the level
+        (handled by the Entry Engine, Book 8.2).
+
+
+──────────────────────────────────────────────────────────────────────────────
+4.10  PULLBACK DETECTION
+──────────────────────────────────────────────────────────────────────────────
+
+  RULE (only evaluated when trend is BULLISH or BEARISH):
+
+    IF |price − EMA21| / EMA21 < 0.1%
+      THEN pullback.to = EMA21
+           pullback.status = AT_SUPPORT
+
+    ELSE IF |price − VWAP| / VWAP < 0.1%
+      THEN pullback.to = VWAP
+           pullback.status = AT_VWAP
+
+    ELSE
+      pullback.status = NONE
+
+  NOTE: A pullback to EMA21 or VWAP in a trending stock is a
+        high-probability entry opportunity (see Book 8.3).
+
+
+──────────────────────────────────────────────────────────────────────────────
+4.11  VOLUME STRUCTURE
+──────────────────────────────────────────────────────────────────────────────
+
+  Split last 10 candles into two halves.
+  avg1 = average volume of first half (candles 1-5)
+  avg2 = average volume of second half (candles 6-10)
+  diff = (avg2 − avg1) / max(avg1, 1)
+
+  RULE:
+    IF diff > +10%   THEN volumeStructure = RISING
+    IF diff < −10%   THEN volumeStructure = FALLING
+    ELSE              volumeStructure = FLAT
+
+  USAGE:
+    - RISING volume on a breakout = confirmation
+    - FALLING volume on a rally = divergence (warning)
+
+
+──────────────────────────────────────────────────────────────────────────────
+4.12  LIQUIDITY SWEEP
+──────────────────────────────────────────────────────────────────────────────
+
+  Look at last 3 candles and prior 15 candles (excluding last 3).
+
+  priorHigh = highest high of candles[-15:-3]
+  priorLow  = lowest low of candles[-15:-3]
+
+  sweptHigh = any of last 3 candles had high > priorHigh
+              AND last candle close < priorHigh   (rejection)
+
+  sweptLow  = any of last 3 candles had low < priorLow
+              AND last candle close > priorLow    (rejection)
+
+  RULE:
+    IF sweptHigh
+      THEN liquiditySweep.direction = HIGH
+           liquiditySweep.swept     = priorHigh
+
+    ELSE IF sweptLow
+      THEN liquiditySweep.direction = LOW
+           liquiditySweep.swept     = priorLow
+
+    ELSE
+      liquiditySweep.direction = NONE
+
+  NOTE: A liquidity sweep is a STOP HUNT — price wicks beyond a key
+        level to trigger stops, then reverses. This is a high-probability
+        reversal entry signal (see Book 8.5).
+
+
+──────────────────────────────────────────────────────────────────────────────
+4.13  TECHNICAL SCORE  (0 to 100)
+──────────────────────────────────────────────────────────────────────────────
+
+  Measures the QUALITY of the technical setup (direction-agnostic).
+
+  COMPONENTS:
+    +20  if trend ≠ NEUTRAL                         (has a direction)
+    +15  if emaAlignment ≠ MIXED                    (EMAs stacked)
+    +10  if vwapPosition = ABOVE or BELOW           (not flat at VWAP)
+    +5   if vwapPosition = AT                       (at VWAP, neutral)
+    +min(25, ADX × 0.5)                             (trend strength)
+    +15  if breakout.status ≠ NONE                  (testing a level)
+    +10  if pullback.status ≠ NONE                  (at S/R or VWAP)
+    +10  if liquiditySweep.direction ≠ NONE         (sweep detected)
+    +5   if volumeStructure = RISING                (volume confirms)
+
+  FINAL:
+    technicalScore = min(100, sum)
+
+  NOTE: This score measures setup quality, not direction.
+        A bearish stock with a clean breakdown can score 90.
+        Direction is determined separately by the Opportunity Engine.
+
+
+================================================================================
+  BOOK 5 — OPTION CHAIN RULES
+  (Phase 7: Option Chain Engine)
+================================================================================
+
+  INPUT:  Option chain (strikes, OI, OI change, IV, volume, bid/ask, greeks)
+  OUTPUT: PCR, IV skew, IV rank, writing trends, unwinding, max pain,
+          support/resistance strikes, expected move, score, bias
+
+
+──────────────────────────────────────────────────────────────────────────────
+5.1  PCR SIGNAL  (Put-Call Ratio, OI-based)
+──────────────────────────────────────────────────────────────────────────────
+
+  totalPutOI  = sum of OI across all PUT strikes
+  totalCallOI = sum of OI across all CALL strikes
+  pcr = totalPutOI / totalCallOI
+
+  RULE (defaults, configurable):
+    IF pcr > 1.20   THEN pcrSignal = LONG     (config: pcrBullish)
+                    (more puts → hedging → bullish bias)
+
+    IF pcr < 0.80   THEN pcrSignal = SHORT    (config: pcrBearish)
+                    (more calls → overbought → bearish bias)
+
+    ELSE            pcrSignal = NEUTRAL
+
+
+──────────────────────────────────────────────────────────────────────────────
+5.2  IV SKEW
+──────────────────────────────────────────────────────────────────────────────
+
+  avgOtmPutIV  = average IV of 3 nearest OTM puts
+  avgOtmCallIV = average IV of 3 nearest OTM calls
+
+  RULE:
+    ivSkew = avgOtmPutIV − avgOtmCallIV
+
+  INTERPRETATION:
+    ivSkew > 2  → put demand elevated (fear, protective buying)
+    ivSkew < 0  → call demand elevated (greed, speculative buying)
+
+
+──────────────────────────────────────────────────────────────────────────────
+5.3  IV RANK
+──────────────────────────────────────────────────────────────────────────────
+
+  Approximate IV rank using ATM IV vs historical range (assumed 8-30%).
+
+  RULE:
+    ivRank = clamp((atmIV − 8) / (30 − 8) × 100, 0, 100)
+
+  INTERPRETATION:
+    ivRank > 70  → IV is high (good for selling premium)
+    ivRank 30-70 → IV is normal
+    ivRank < 30  → IV is low (cheap options, good for buying)
+
+
+──────────────────────────────────────────────────────────────────────────────
+5.4  CALL WRITING TREND
+──────────────────────────────────────────────────────────────────────────────
+
+  callOIChangeSum = sum of OI change across all CALL strikes
+
+  RULE:
+    IF callOIChangeSum > +10,000   THEN callWritingTrend = INCREASING
+    IF callOIChangeSum < −10,000   THEN callWritingTrend = DECREASING
+    ELSE                            callWritingTrend = FLAT
+
+  INTERPRETATION:
+    INCREASING call OI = sellers writing calls = bearish (resistance building)
+    DECREASING call OI = short covering = bullish
+
+
+──────────────────────────────────────────────────────────────────────────────
+5.5  PUT WRITING TREND
+──────────────────────────────────────────────────────────────────────────────
+
+  putOIChangeSum = sum of OI change across all PUT strikes
+
+  RULE:
+    IF putOIChangeSum > +10,000   THEN putWritingTrend = INCREASING
+    IF putOIChangeSum < −10,000   THEN putWritingTrend = DECREASING
+    ELSE                           putWritingTrend = FLAT
+
+  INTERPRETATION:
+    INCREASING put OI = sellers writing puts = bullish (support building)
+    DECREASING put OI = short covering = bearish
+
+
+──────────────────────────────────────────────────────────────────────────────
+5.6  UNWINDING DETECTION
+──────────────────────────────────────────────────────────────────────────────
+
+  RULE:
+    IF callOIChangeSum < −20,000  AND  putOIChangeSum > 0
+      THEN unwinding = CALL_UNWINDING     (bears covering, bulls writing)
+
+    ELSE IF putOIChangeSum < −20,000  AND  callOIChangeSum > 0
+      THEN unwinding = PUT_UNWINDING      (bulls covering, bears writing)
+
+    ELSE
+      unwinding = NONE
+
+  NOTE: Unwinding often precedes a reversal — positions are being closed
+        before a move.
+
+
+──────────────────────────────────────────────────────────────────────────────
+5.7  SUPPORT AND RESISTANCE STRIKES
+──────────────────────────────────────────────────────────────────────────────
+
+  resistanceStrike = strike with highest CALL OI  (call writers = resistance)
+  supportStrike    = strike with highest PUT OI   (put writers = support)
+  liquidityStrike  = strike with highest total OI (most liquid)
+
+
+──────────────────────────────────────────────────────────────────────────────
+5.8  MAX PAIN
+──────────────────────────────────────────────────────────────────────────────
+
+  For each strike K:
+    pain(K) = Σ [ max(K − strike, 0) × callOI(strike) ]        (call holders' loss)
+            + Σ [ max(strike − K, 0) × putOI(strike) ]         (put holders' loss)
+
+  RULE:
+    maxPainStrike = strike K that minimizes pain(K)
+
+  INTERPRETATION:
+    Price tends to gravitate toward max pain strike at expiry
+    (option writers profit most when price settles at max pain).
+
+
+──────────────────────────────────────────────────────────────────────────────
+5.9  LIQUIDITY (SPREAD)
+──────────────────────────────────────────────────────────────────────────────
+
+  atmCall = ATM call option row
+  spread  = atmCall.ask − atmCall.bid
+
+  RULE:
+    IF spread < atmCall.ltp × 2%   THEN liquidity = TIGHT     (good)
+    ELSE                            THEN liquidity = WIDE      (caution)
+
+
+──────────────────────────────────────────────────────────────────────────────
+5.10  EXPECTED MOVE  (1 standard deviation)
+──────────────────────────────────────────────────────────────────────────────
+
+  daysToExpiry = max(days until expiry, 1)
+  expectedMove = spot × (atmIV / 100) × √(daysToExpiry / 365)
+
+  USAGE:
+    - Defines the expected trading range for the expiry
+    - Helps select strike (OTM beyond expected move = low probability)
+
+
+──────────────────────────────────────────────────────────────────────────────
+5.11  OPTION CHAIN BIAS
+──────────────────────────────────────────────────────────────────────────────
+
+  Combines multiple option chain signals into a directional bias.
+
+  RULE:
+    IF pcr > pcrBullish (1.2)
+       AND putWritingTrend = INCREASING
+       AND callWritingTrend ≠ INCREASING
+      THEN bias = LONG
+
+    ELSE IF pcr < pcrBearish (0.8)
+       AND callWritingTrend = INCREASING
+       AND putWritingTrend ≠ INCREASING
+      THEN bias = SHORT
+
+    ELSE
+      bias = NEUTRAL
+
+  NOTE: Requires PCR AND writing trend confirmation.
+        PCR alone is not sufficient.
+
+
+──────────────────────────────────────────────────────────────────────────────
+5.12  OPTION CHAIN SCORE  (0 to 100)
+──────────────────────────────────────────────────────────────────────────────
+
+  COMPONENTS:
+    +15  if pcrSignal ≠ NEUTRAL                (PCR aligned with bias)
+    +15  if putWritingTrend = INCREASING
+          AND callWritingTrend ≠ INCREASING    (bullish writing)
+    +15  if callWritingTrend = INCREASING
+          AND putWritingTrend ≠ INCREASING     (bearish writing)
+    +10  if |spot − maxPain| / spot < 0.5%     (price at max pain)
+    +10  if spread < ATM LTP × 2%              (tight spread, liquid)
+    +10  if ivRank in [30, 70]                 (normal IV)
+    +5   if ivRank outside [30, 70]            (extreme IV)
+    +10  if unwinding ≠ NONE                   (unwinding detected)
+
+  FINAL:
+    optionChainScore = min(100, sum)
+
+
+================================================================================
+  BOOK 6 — OPPORTUNITY RULES
+  (Phase 8: Opportunity Engine)
+================================================================================
+
+  INPUT:  Market + Sector + RS outputs, plus Technical + Option Chain per symbol
+  OUTPUT: Ranked list of all symbols with direction, scores, confidence
+
+
+──────────────────────────────────────────────────────────────────────────────
+6.1  DIRECTION SELECTION (CE vs PE)
+──────────────────────────────────────────────────────────────────────────────
+
+  For each symbol, count bullish vs bearish signals:
+
+    BULL points:
+      +1  if market.marketScore > 0
+      +1  if sector.strength > 0
+      +1  if rs.rsScore > 0
+      +2  if technical.trend = BULLISH
+      +1  if optionChain.bias = LONG
+
+    BEAR points:
+      +1  if market.marketScore < 0
+      +1  if sector.strength < 0
+      +1  if rs.rsScore < 0
+      +2  if technical.trend = BEARISH
+      +1  if optionChain.bias = SHORT
+
+  RULE:
+    IF bullPoints >= bearPoints  THEN direction = CE  (buy Call)
+    ELSE                          THEN direction = PE  (buy Put)
+
+  NOTE: Technical trend has 2× weight because it's the most direct signal.
+
+
+──────────────────────────────────────────────────────────────────────────────
+6.2  PER-ENGINE SCORE ALIGNMENT
+──────────────────────────────────────────────────────────────────────────────
+
+  Each engine's raw score is aligned to the chosen direction.
+  For CE direction, bullish engines score higher; for PE, bearish score higher.
+
+  dirMultiplier = (direction = CE) ? +1 : −1
+
+  marketScore   = 50 + market.marketScore × 0.5 × dirMultiplier
+  sectorScore   = clamp(50 + sector.strength × 0.5 × dirMultiplier, 0, 100)
+  rsScore       = clamp(50 + rs.rsScore × 0.5 × dirMultiplier, 0, 100)
+  technicalScore = technical.score                          (already 0..100)
+  optionChainScore = optionChain.score                      (already 0..100)
+
+
+──────────────────────────────────────────────────────────────────────────────
+6.3  TOTAL SCORE  (0 to 100)
+──────────────────────────────────────────────────────────────────────────────
+
+  Weighted sum using configurable engine weights.
+
+  totalScore = marketScore   × weightMarket       (default 0.15)
+             + sectorScore   × weightSector       (default 0.10)
+             + rsScore       × weightRS           (default 0.10)
+             + technicalScore × weightTechnical    (default 0.25)
+             + optionChainScore × weightOptionChain (default 0.25)
+             + min(technicalScore, optionChainScore) × weightRisk (default 0.15)
+
+  FINAL:
+    totalScore = clamp(totalScore, 0, 100)
+
+  NOTE: The Risk component uses the minimum of Technical and Option Chain
+        scores as a proxy for risk quality (both must be decent).
+
+
+──────────────────────────────────────────────────────────────────────────────
+6.4  CONFIDENCE  (0 to 100)
+──────────────────────────────────────────────────────────────────────────────
+
+  Count how many of 5 engines are aligned with the chosen direction:
+
+    aligned[0] = (market.marketScore × dirMultiplier > 0) ? 1 : 0
+    aligned[1] = (sector.strength × dirMultiplier > 0) ? 1 : 0
+    aligned[2] = (rs.rsScore × dirMultiplier > 0) ? 1 : 0
+    aligned[3] = (technical.trend = (direction = CE ? BULLISH : BEARISH)) ? 1 : 0
+    aligned[4] = (optionChain.bias = (direction = CE ? LONG : SHORT)) ? 1 : 0
+
+  alignCount = sum(aligned)
+
+  RULE:
+    confidence = min(100, (alignCount / 5) × 50 + totalScore × 0.5)
+
+  EXAMPLE:
+    5/5 aligned + totalScore 80 → confidence = 50 + 40 = 90
+    3/5 aligned + totalScore 60 → confidence = 30 + 30 = 60
+    1/5 aligned + totalScore 50 → confidence = 10 + 25 = 35
+
+
+──────────────────────────────────────────────────────────────────────────────
+6.5  RANKING
+──────────────────────────────────────────────────────────────────────────────
+
+  Sort all symbols by totalScore DESCENDING.
+  Assign rank 1 (best) to N (worst).
+  Output top 10 to the dashboard.
+
+
+================================================================================
+  BOOK 7 — STRIKE SELECTION RULES
+  (Phase 9: Strike Selection Engine)
+================================================================================
+
+  INPUT:  Symbol, direction, technical, option chain, conviction (0..100)
+  OUTPUT: Primary strike, alternative strike, aggressive strike, strike type
+
+
+──────────────────────────────────────────────────────────────────────────────
+7.1  CONVICTION TIERS
+──────────────────────────────────────────────────────────────────────────────
+
+  conviction = opportunity.confidence (from Book 6.4)
+
+  RULE:
+    IF conviction < 45       THEN tier = LOW        → select ITM
+    IF conviction 45..70     THEN tier = MEDIUM     → select ATM
+    IF conviction > 70       THEN tier = HIGH       → select OTM
+
+
+──────────────────────────────────────────────────────────────────────────────
+7.2  STRIKE SELECTION BY CONVICTION
+──────────────────────────────────────────────────────────────────────────────
+
+  atmStrike = strike closest to spot price (rounded to strike step)
+  step      = symbol's strike interval (e.g., NIFTY = 50, BANKNIFTY = 100)
+
+  RULE:
+    IF tier = LOW (conviction < 45):
+      primaryStrike = atmStrike − step   (for CE, ITM call)
+                    = atmStrike + step   (for PE, ITM put)
+
+    IF tier = MEDIUM (conviction 45..70):
+      primaryStrike = atmStrike           (ATM)
+
+    IF tier = HIGH (conviction > 70):
+      primaryStrike = atmStrike + step    (for CE, OTM call)
+                    = atmStrike − step    (for PE, OTM put)
+
+  RATIONALE:
+    - Low conviction → ITM (higher delta, safer, moves more like stock)
+    - Medium conviction → ATM (balanced delta ~0.5, good liquidity)
+    - High conviction → OTM (lower premium, higher leverage if right)
+
+
+──────────────────────────────────────────────────────────────────────────────
+7.3  LIQUIDITY FILTER
+──────────────────────────────────────────────────────────────────────────────
+
+  Check OI at the primary strike.
+
+  RULE:
+    IF primaryStrike OI > 1,000,000   THEN liquidity = "High liquidity"
+    IF primaryStrike OI > 250,000     THEN liquidity = "Adequate liquidity"
+    ELSE                               THEN liquidity = "Low liquidity — widen spread"
+
+  NOTE: Low liquidity strikes should be avoided. The dashboard displays
+        the warning; the user decides.
+
+
+──────────────────────────────────────────────────────────────────────────────
+7.4  ALTERNATIVE AND AGGRESSIVE STRIKES
+──────────────────────────────────────────────────────────────────────────────
+
+  altStrike        = atmStrike                        (always ATM)
+  aggressiveStrike = atmStrike + 2 × step (for CE)   (deep OTM)
+                   = atmStrike − 2 × step (for PE)
+
+  OUTPUT also includes:
+    primaryLTP    = last traded price at primary strike
+    primaryDelta  = |delta| at primary strike
+    primaryIV     = IV at primary strike
+    expiry        = weekly Thursday expiry date
+
+
+================================================================================
+  BOOK 8 — ENTRY RULES
+  (Phase 10: Entry Engine)
+================================================================================
+
+  INPUT:  Symbol, direction, technical engine output
+  OUTPUT: Entry type, entry price (underlying), entry trigger, stop-loss
+
+  CORE PRINCIPLE: NEVER recommend immediate buying.
+                  Always wait for a trigger.
+
+
+──────────────────────────────────────────────────────────────────────────────
+8.1  ENTRY PRIORITY
+──────────────────────────────────────────────────────────────────────────────
+
+  Evaluate in this order. Pick the FIRST that applies:
+
+    1. LIQUIDITY_SWEEP  (if sweep detected)
+    2. BREAKOUT         (if breakout detected)
+    3. RETEST           (if pullback to EMA21 or VWAP)
+    4. VWAP             (if price near VWAP)
+    5. VWAP (fallback)  (wait for pullback to VWAP — no chasing)
+
+  RATIONALE:
+    Liquidity sweeps are highest probability (stop hunt reversal).
+    Breakouts are next (momentum).
+    Retests are high probability (trend continuation).
+    VWAP entries are baseline (mean reversion in trend).
+    Fallback = wait, never chase.
+
+
+──────────────────────────────────────────────────────────────────────────────
+8.2  BREAKOUT ENTRY
+──────────────────────────────────────────────────────────────────────────────
+
+  CONDITION: technical.breakout.status ≠ NONE
+
+  For BULLISH breakout (BREAKING_OUT):
+    entryPrice   = breakout.level                (the resistance being tested)
+    entryTrigger = "Enter on close above {level} with volume"
+    stopLoss     = level − ATR                   (1 ATR below breakout)
+
+  For BEARISH breakout (BREAKING_DOWN):
+    entryPrice   = breakout.level                (the support being tested)
+    entryTrigger = "Enter on close below {level} with volume"
+    stopLoss     = level + ATR                   (1 ATR above breakdown)
+
+
+──────────────────────────────────────────────────────────────────────────────
+8.3  RETEST ENTRY
+──────────────────────────────────────────────────────────────────────────────
+
+  CONDITION: technical.pullback.status ≠ NONE  AND  trend is aligned
+
+  For BULLISH trend (direction = CE):
+    entryPrice   = pullback.to                   (EMA21 or VWAP)
+    entryTrigger = "Enter on bounce from {EMA21/VWAP}"
+    stopLoss     = pullback.to − ATR × 0.8       (slightly tighter than breakout)
+
+  For BEARISH trend (direction = PE):
+    entryPrice   = pullback.to
+    entryTrigger = "Enter on rejection from {EMA21/VWAP}"
+    stopLoss     = pullback.to + ATR × 0.8
+
+
+──────────────────────────────────────────────────────────────────────────────
+8.4  VWAP ENTRY
+──────────────────────────────────────────────────────────────────────────────
+
+  CONDITION: price within 0.3% of VWAP  AND  vwapPosition ≠ AT (excluded by above)
+
+  For direction = CE:
+    entryPrice   = VWAP
+    entryTrigger = "Enter on VWAP test at {vwap}"
+    stopLoss     = VWAP − ATR × 0.8
+
+  For direction = PE:
+    entryPrice   = VWAP
+    entryTrigger = "Enter on VWAP test at {vwap}"
+    stopLoss     = VWAP + ATR × 0.8
+
+
+──────────────────────────────────────────────────────────────────────────────
+8.5  LIQUIDITY SWEEP ENTRY
+──────────────────────────────────────────────────────────────────────────────
+
+  CONDITION: technical.liquiditySweep.direction ≠ NONE
+
+  For direction = CE (bullish reversal after sweep LOW):
+    entryPrice   = liquiditySweep.swept          (the swept low level)
+    entryTrigger = "Wait for price to reclaim {swept} after sweep low"
+    stopLoss     = swept − ATR                   (1 ATR below swept level)
+
+  For direction = PE (bearish reversal after sweep HIGH):
+    entryPrice   = liquiditySweep.swept          (the swept high level)
+    entryTrigger = "Wait for price to break below {swept} after sweep high"
+    stopLoss     = swept + ATR                   (1 ATR above swept level)
+
+  NOTE: This is the highest-probability entry type.
+        The sweep indicates stops were hunted; the reversal is the trade.
+
+
+──────────────────────────────────────────────────────────────────────────────
+8.6  FALLBACK (NO-CHASE) ENTRY
+──────────────────────────────────────────────────────────────────────────────
+
+  CONDITION: None of the above setups are active.
+
+  RULE:
+    entryType    = VWAP
+    entryPrice   = VWAP
+    entryTrigger = "Wait for pullback to VWAP {vwap} (no immediate chase)"
+    stopLoss     = VWAP − ATR (CE) or VWAP + ATR (PE)
+
+  RATIONALE:
+    If no high-probability setup exists, DO NOT enter.
+    Wait for price to come to VWAP rather than chasing.
+    This prevents FOMO entries.
+
+
+──────────────────────────────────────────────────────────────────────────────
+8.7  STOP-LOSS CALCULATION
+──────────────────────────────────────────────────────────────────────────────
+
+  All stop-losses are based on ATR (underlying price), NOT option premium.
+
+  RULE:
+    BREAKOUT entry:         SL = entry ± 1.0 × ATR
+    RETEST entry:           SL = entry ± 0.8 × ATR
+    VWAP entry:             SL = entry ± 0.8 × ATR
+    LIQUIDITY_SWEEP entry:  SL = entry ± 1.0 × ATR
+    Fallback VWAP:          SL = entry ± 1.0 × ATR
+
+  DIRECTION:
+    For CE (long): SL is BELOW entry
+    For PE (short): SL is ABOVE entry
+
+
+================================================================================
+  BOOK 9 — RISK RULES
+  (Phase 11: Risk Engine)
+================================================================================
+
+  INPUT:  Symbol, direction, entry plan, technical (ATR)
+  OUTPUT: Entry, SL, TP1, TP2, TP3, RR, position size, max loss, max profit
+
+  CORE PRINCIPLE: All calculations use UNDERLYING price, not option premium.
+
+
+──────────────────────────────────────────────────────────────────────────────
+9.1  RISK DISTANCE (R)
+──────────────────────────────────────────────────────────────────────────────
+
+  R = |entryPrice − stopLoss|
+
+  RULE:
+    R = max(|entry.entryPrice − entry.stopLoss|, technical.atr)
+
+  NOTE: R is the distance from entry to stop-loss in underlying price units.
+        All targets and PnL are expressed in multiples of R.
+
+
+──────────────────────────────────────────────────────────────────────────────
+9.2  TARGET CALCULATION (TP1, TP2, TP3)
+──────────────────────────────────────────────────────────────────────────────
+
+  For CE (long) direction:
+    TP1 = entryPrice + R × 1    (1R target)
+    TP2 = entryPrice + R × 2    (2R target)
+    TP3 = entryPrice + R × 3    (3R target)
+
+  For PE (short) direction:
+    TP1 = entryPrice − R × 1
+    TP2 = entryPrice − R × 2
+    TP3 = entryPrice − R × 3
+
+
+──────────────────────────────────────────────────────────────────────────────
+9.3  REWARD:RISK RATIO
+──────────────────────────────────────────────────────────────────────────────
+
+  RULE:
+    RR = distance to TP2 / R = 2.0
+
+  NOTE: RR is always 1:2 by construction (TP2 is at 2R).
+        If minRR config is > 2, the trade is still valid (RR meets minimum).
+
+
+──────────────────────────────────────────────────────────────────────────────
+9.4  POSITION SIZING
+──────────────────────────────────────────────────────────────────────────────
+
+  riskBudget = capital × (riskPerTradePct / 100)
+             = 200,000 × (1.0 / 100) = ₹2,000  (defaults)
+
+  optionPremium  = LTP at primary strike (from option chain)
+  deltaApprox    = 0.5  (ATM approximation; actual delta used if available)
+  riskPerShare   = max(R × deltaApprox, optionPremium × 0.3)
+
+  EXAMPLE:
+    R = 10 (underlying points)
+    deltaApprox = 0.5
+    riskPerShare = max(10 × 0.5, premium × 0.3) = max(5, ...) = 5
+
+  lotSize        = symbol's lot size (e.g., NIFTY = 75)
+  positionSize   = max(1, floor(riskBudget / (riskPerShare × lotSize)))
+
+  EXAMPLE (continued):
+    riskBudget = ₹2,000
+    riskPerShare = ₹5
+    lotSize = 75
+    positionSize = floor(2000 / (5 × 75)) = floor(5.33) = 5 lots
+
+  NOTE: If positionSize = 0, the trade is too small to take.
+        The engine forces minimum 1 lot.
+
+
+──────────────────────────────────────────────────────────────────────────────
+9.5  MAX LOSS
+──────────────────────────────────────────────────────────────────────────────
+
+  maxLoss = positionSize × lotSize × riskPerShare
+
+  EXAMPLE:
+    5 lots × 75 × ₹5 = ₹1,875 max loss
+
+  NOTE: This should be <= riskBudget. If it exceeds riskBudget,
+        positionSize is reduced.
+
+
+──────────────────────────────────────────────────────────────────────────────
+9.6  MAX PROFIT
+──────────────────────────────────────────────────────────────────────────────
+
+  profitPerShare = R × 2 × deltaApprox    (to TP2)
+  maxProfit = positionSize × lotSize × profitPerShare
+
+  EXAMPLE:
+    profitPerShare = 10 × 2 × 0.5 = ₹10
+    maxProfit = 5 × 75 × ₹10 = ₹3,750
+
+
+──────────────────────────────────────────────────────────────────────────────
+9.7  RISK VETO CONDITIONS
+──────────────────────────────────────────────────────────────────────────────
+
+  The Risk Engine casts its own vote in the Decision Engine (Book 10).
+
+  RULE:
+    IF RR < minRR (default 2.0)
+      THEN riskVote = AVOID, riskScore = 30
+
+    ELSE IF RR < minRR + 0.5
+      THEN riskVote = WAIT, riskScore = 60
+
+    ELSE IF maxLoss > capital × 2%
+      THEN riskVote = AVOID, riskScore = 40
+
+    ELSE
+      riskVote = ENTER, riskScore = 90
+
+
+================================================================================
+  BOOK 10 — DECISION RULES
+  (Phase 14: Decision Engine)
+================================================================================
+
+  INPUT:  Direction + all engine outputs + risk plan
+  OUTPUT: Final decision (ENTER/WAIT/WATCH/AVOID), confidence, votes
+
+
+──────────────────────────────────────────────────────────────────────────────
+10.1  ENGINE VOTE GENERATION
+──────────────────────────────────────────────────────────────────────────────
+
+  Each of 6 engine categories produces a vote:
+
+  ┌──────────────────┬──────────┬─────────────────────────────────────────┐
+  │ ENGINE           │ WEIGHT   │ VOTE LOGIC                              │
+  ├──────────────────┼──────────┼─────────────────────────────────────────┤
+  │ Market           │ 0.15     │ aligned = (marketScore direction matches)│
+  │                  │          │ strength = |marketScore|                 │
+  │                  │          │ IF aligned AND strength > 30 AND conf>60 │
+  │                  │          │   → ENTER                               │
+  │                  │          │ ELSE IF aligned AND strength > 15        │
+  │                  │          │   → WAIT                                │
+  │                  │          │ ELSE IF NOT aligned AND strength > 30    │
+  │                  │          │   → AVOID                               │
+  │                  │          │ ELSE → WATCH                            │
+  ├──────────────────┼──────────┼─────────────────────────────────────────┤
+  │ Sector           │ 0.10     │ aligned = (sector.strength direction)   │
+  │                  │          │ strength = |sector.strength|             │
+  │                  │          │ IF aligned AND strength > 30 → ENTER     │
+  │                  │          │ ELSE IF aligned → WAIT                  │
+  │                  │          │ ELSE IF NOT aligned AND strength > 30    │
+  │                  │          │   → AVOID                               │
+  │                  │          │ ELSE → WATCH                            │
+  ├──────────────────┼──────────┼─────────────────────────────────────────┤
+  │ RelativeStrength │ 0.10     │ aligned = (rs.rsScore direction)        │
+  │                  │          │ strength = |rs.rsScore|                  │
+  │                  │          │ IF aligned AND strength > 30 → ENTER     │
+  │                  │          │ ELSE IF aligned → WAIT                  │
+  │                  │          │ ELSE IF NOT aligned AND strength > 30    │
+  │                  │          │   → AVOID                               │
+  │                  │          │ ELSE → WATCH                            │
+  ├──────────────────┼──────────┼─────────────────────────────────────────┤
+  │ Technical        │ 0.25     │ aligned = trend matches direction       │
+  │                  │          │ IF aligned AND technicalScore > 60       │
+  │                  │          │   → ENTER                               │
+  │                  │          │ ELSE IF aligned AND technicalScore > 40  │
+  │                  │          │   → WAIT                                │
+  │                  │          │ ELSE IF NOT aligned AND technicalScore>60│
+  │                  │          │   → AVOID                               │
+  │                  │          │ ELSE → WATCH                            │
+  ├──────────────────┼──────────┼─────────────────────────────────────────┤
+  │ OptionChain      │ 0.25     │ aligned = bias matches direction        │
+  │                  │          │ IF aligned AND ocScore > 60 → ENTER      │
+  │                  │          │ ELSE IF aligned → WAIT                  │
+  │                  │          │ ELSE IF NOT aligned AND ocScore > 60     │
+  │                  │          │   → AVOID                               │
+  │                  │          │ ELSE → WATCH                            │
+  ├──────────────────┼──────────┼─────────────────────────────────────────┤
+  │ Risk             │ 0.15     │ See Book 9.7                            │
+  └──────────────────┴──────────┴─────────────────────────────────────────┘
+
+
+──────────────────────────────────────────────────────────────────────────────
+10.2  WEIGHTED AGGREGATION
+──────────────────────────────────────────────────────────────────────────────
+
+  For each vote, apply a modifier:
+
+    ENTER → +1.0 × weight
+    WAIT  → +0.4 × weight
+    WATCH → +0.1 × weight
+    AVOID → −1.5 × weight    (AVOID is penalized 1.5× — risk aversion)
+
+  aggregate = Σ (vote_modifier × weight)
+
+  EXAMPLE:
+    Market:          ENTER × 0.15 = +0.150
+    Sector:          WAIT  × 0.10 = +0.040
+    RS:              ENTER × 0.10 = +0.100
+    Technical:       ENTER × 0.25 = +0.250
+    OptionChain:     WAIT  × 0.25 = +0.100
+    Risk:            ENTER × 0.15 = +0.150
+    ─────────────────────────────────────────
+    aggregate = +0.790
+
+
+──────────────────────────────────────────────────────────────────────────────
+10.3  DECISION THRESHOLDS
+──────────────────────────────────────────────────────────────────────────────
+
+  RULE:
+    IF aggregate >= 0.70  THEN decision = ENTER
+    IF aggregate >= 0.40  THEN decision = WAIT
+    IF aggregate >= 0.10  THEN decision = WATCH
+    ELSE                   decision = AVOID
+
+  RATIONALE:
+    ENTER requires strong consensus (≥ 0.70 out of max 1.0).
+    A single AVOID vote (−1.5× weight) can flip a decision.
+    Example: Technical AVOID (0.25 × −1.5 = −0.375) can turn
+    a 0.80 aggregate into 0.425 → WAIT instead of ENTER.
+
+
+──────────────────────────────────────────────────────────────────────────────
+10.4  CONFIDENCE CALCULATION
+──────────────────────────────────────────────────────────────────────────────
+
+  Only count engines ALIGNED with the final decision.
+
+  RULE:
+    For each vote v:
+      IF (decision = ENTER AND v.vote = ENTER)
+      OR (decision = WAIT  AND v.vote in {ENTER, WAIT})
+      OR (decision = WATCH AND v.vote ≠ AVOID)
+      OR (decision = AVOID AND v.vote = AVOID)
+        THEN include v.confidence × v.weight in numerator
+             include v.weight in denominator
+
+    confidence = (Σ included confidence × weight) / (Σ included weight)
+
+  EXAMPLE:
+    Decision = ENTER
+    Votes: Market(ENTER, conf 80, w 0.15), Technical(ENTER, conf 70, w 0.25),
+           Risk(ENTER, conf 90, w 0.15)
+    Other votes are WAIT/WATCH (excluded from confidence calc)
+
+    confidence = (80×0.15 + 70×0.25 + 90×0.15) / (0.15+0.25+0.15)
+               = (12 + 17.5 + 13.5) / 0.55
+               = 43 / 0.55 = 78%
+
+
+──────────────────────────────────────────────────────────────────────────────
+10.5  AVOID PENALTY
+──────────────────────────────────────────────────────────────────────────────
+
+  AVOID votes count −1.5× instead of −1.0×.
+
+  RATIONALE:
+    AVOID means "this engine sees something wrong."
+    Risk management is more important than opportunity capture.
+    One strong AVOID should be able to block an ENTER.
+
+  EXAMPLE:
+    If Risk engine (weight 0.15) votes AVOID:
+    Penalty = 0.15 × 1.5 = 0.225
+
+    This means the other engines need to produce at least 0.925 in
+    positive votes to reach the ENTER threshold of 0.70.
+
+
+================================================================================
+  BOOK 11 — TRADE MANAGEMENT RULES
+  (Phase 12: Trade Management Engine)
+================================================================================
+
+  INPUT:  Active trade, technical, option chain, market
+  OUTPUT: Action (HOLD/TRAIL_SL/MOVE_TO_BREAKEVEN/PARTIAL_EXIT/FULL_EXIT/WATCH)
+
+
+──────────────────────────────────────────────────────────────────────────────
+11.1  R-MULTIPLE CALCULATION
+──────────────────────────────────────────────────────────────────────────────
+
+  slDistance = |entryUnderlying − initialStopLoss|
+  rMultiple  = (isLong ? (currentUnderlying − entryUnderlying) : (entryUnderlying − currentUnderlying)) / slDistance
+
+  EXAMPLE (long):
+    Entry = 100, SL = 98, current = 103
+    slDistance = 2
+    rMultiple = (103 − 100) / 2 = +1.5R
+
+  EXAMPLE (short):
+    Entry = 100, SL = 102, current = 97
+    slDistance = 2
+    rMultiple = (100 − 97) / 2 = +1.5R
+
+
+──────────────────────────────────────────────────────────────────────────────
+11.2  MOVE TO BREAKEVEN
+──────────────────────────────────────────────────────────────────────────────
+
+  CONDITION: TP1 hit AND current state = ENTERED
+
+  RULE:
+    action = MOVE_TO_BREAKEVEN
+    newStopLoss = entryUnderlying    (move SL to entry — no more risk)
+
+  RATIONALE:
+    After TP1 (1R profit), the trade is "free."
+    Move SL to breakeven to eliminate risk.
+
+
+──────────────────────────────────────────────────────────────────────────────
+11.3  TRAIL STOP-LOSS
+──────────────────────────────────────────────────────────────────────────────
+
+  THREE TRIGGER CONDITIONS (any one):
+
+  (a) TREND REVERSAL + PROFIT:
+      IF trend reversed against position AND rMultiple > 0.5
+        THEN action = TRAIL_SL
+             trailDist = ATR × trailATRMultiple (default 2.0)
+             newStopLoss = currentPrice − trailDist (long)
+                          = currentPrice + trailDist (short)
+
+      ONLY move SL if new SL is BETTER than current SL:
+        Long:  newStopLoss > currentStopLoss
+        Short: newStopLoss < currentStopLoss
+
+  (b) STRONG PROFIT:
+      IF rMultiple > 1.5
+        THEN action = TRAIL_SL (same calculation as above)
+
+  (c) TP2 HIT:
+      IF TP2 hit AND state not in {TP2, TRAILING}
+        THEN action = PARTIAL_EXIT_TP2
+             newStopLoss = entryUnderlying (breakeven)
+             "Book 50% and trail rest at breakeven"
+
+
+──────────────────────────────────────────────────────────────────────────────
+11.4  PARTIAL EXIT (TP2)
+──────────────────────────────────────────────────────────────────────────────
+
+  CONDITION: TP2 hit AND state not in {TP2, TRAILING}
+
+  RULE:
+    action = PARTIAL_EXIT_TP2
+    "Book 50% at TP2, move SL to breakeven, trail the rest"
+
+  NOTE: The system recommends the action; the user executes.
+        Actual partial exit quantity is suggested at 50% of position.
+
+
+──────────────────────────────────────────────────────────────────────────────
+11.5  FULL EXIT (MANAGEMENT)
+──────────────────────────────────────────────────────────────────────────────
+
+  THREE TRIGGER CONDITIONS (any one):
+
+  (a) STOP LOSS HIT:
+      IF rMultiple <= −1.0
+        THEN action = FULL_EXIT
+             reason = "Stop loss hit (R = -1)"
+
+  (b) TREND + MARKET AGAINST:
+      IF trend reversed AND market against AND rMultiple < 0.5
+        THEN action = FULL_EXIT
+             reason = "Multiple confirmations against trade"
+
+  (c) EXIT ENGINE SAYS EXIT:
+      IF exitEngine.action = EXIT
+        THEN action = FULL_EXIT
+             reason = exitEngine.reason
+
+
+──────────────────────────────────────────────────────────────────────────────
+11.6  WATCH (WEAKENING)
+──────────────────────────────────────────────────────────────────────────────
+
+  CONDITION: price below VWAP (for long) AND rMultiple < 0
+
+  RULE:
+    action = WATCH
+    reason = "Price below VWAP and in loss — watch closely for exit trigger"
+
+  NOTE: WATCH transitions the trade to WEAKENING state.
+        The trade is not exited, but it's on probation.
+
+
+──────────────────────────────────────────────────────────────────────────────
+11.7  HOLD
+──────────────────────────────────────────────────────────────────────────────
+
+  DEFAULT: If none of the above conditions are met.
+
+  RULE:
+    action = HOLD
+    reason = "Trade progressing normally — hold"
+
+
+================================================================================
+  BOOK 12 — EXIT RULES
+  (Phase 13: Exit Engine)
+================================================================================
+
+  INPUT:  Active trade, technical, option chain, market, sector
+  OUTPUT: Exit action (CONTINUE/TRAIL/REDUCE_POSITION/EXIT), exit score
+
+  CORE PRINCIPLE: NEVER exit because ONE indicator changes.
+                  Build a multi-factor Exit Score.
+
+
+──────────────────────────────────────────────────────────────────────────────
+12.1  EXIT SCORE COMPONENTS
+──────────────────────────────────────────────────────────────────────────────
+
+  Each component adds to exitScore (0..100, higher = more likely to exit):
+
+  ┌──────────────────────────────┬──────┬──────────────────────────────────┐
+  │ COMPONENT                    │ POINTS│ CONDITION                        │
+  ├──────────────────────────────┼──────┼──────────────────────────────────┤
+  │ Trend reversed               │ +25  │ technical.trend against position  │
+  │ VWAP lost (in loss)          │ +15  │ vwapPosition against AND R < 0    │
+  │ Option chain weakened        │ +15  │ oc.bias against position          │
+  │ Unwinding detected           │ +10  │ oc.unwinding matches against side │
+  │ Volume fading on rally       │ +5   │ volumeStructure = FALLING AND R>0 │
+  │ Sector weakened              │ +10  │ sector.strength against AND strong│
+  │ Market weakened              │ +15  │ marketScore against AND > 25      │
+  │ Liquidity sweep against      │ +10  │ sweep direction against position  │
+  └──────────────────────────────┴──────┴──────────────────────────────────┘
+
+  MAXIMUM POSSIBLE: 105 (capped at 100)
+
+
+──────────────────────────────────────────────────────────────────────────────
+12.2  EXIT SCORE CALCULATION
+──────────────────────────────────────────────────────────────────────────────
+
+  exitScore = 0
+
+  // Trend
+  IF (isLong AND technical.trend = BEARISH) OR (NOT isLong AND technical.trend = BULLISH)
+    THEN exitScore += 25; reason += "Trend reversed against position"
+  ELSE
+    reason += "Trend aligned with position"
+
+  // VWAP
+  IF (isLong AND vwapPosition = BELOW) OR (NOT isLong AND vwapPosition = ABOVE)
+    AND rMultiple < 0
+    THEN exitScore += 15; reason += "Price below VWAP while in loss"
+  ELSE
+    reason += "VWAP structure OK"
+
+  // Option Chain bias
+  IF (isLong AND oc.bias = SHORT) OR (NOT isLong AND oc.bias = LONG)
+    THEN exitScore += 15; reason += "Option chain bias flipping against"
+
+  // Unwinding
+  IF (isLong AND oc.unwinding = CALL_UNWINDING) OR (NOT isLong AND oc.unwinding = PUT_UNWINDING)
+    THEN exitScore += 10; reason += "{unwinding} detected"
+
+  // Volume
+  IF technical.volumeStructure = FALLING AND rMultiple > 0
+    THEN exitScore += 5; reason += "Volume fading on rally"
+
+  // Sector
+  IF sector AND ((isLong AND sector.strength < -20) OR (NOT isLong AND sector.strength > 20))
+    THEN exitScore += 10; reason += "Sector {sector} weakening"
+
+  // Market
+  IF (isLong AND marketScore < -25) OR (NOT isLong AND marketScore > 25)
+    THEN exitScore += 15; reason += "Market turning against"
+
+  // Liquidity sweep
+  IF technical.liquiditySweep.direction ≠ NONE
+    sweepAgainst = (isLong AND direction = HIGH) OR (NOT isLong AND direction = LOW)
+    IF sweepAgainst
+      THEN exitScore += 10; reason += "Liquidity sweep against position"
+
+  exitScore = min(100, exitScore)
+
+
+──────────────────────────────────────────────────────────────────────────────
+12.3  EXIT ACTION THRESHOLDS
+──────────────────────────────────────────────────────────────────────────────
+
+  RULE:
+    IF exitScore >= 60  THEN action = EXIT             (multiple confirmations)
+    IF exitScore >= 40  THEN action = REDUCE_POSITION  (reduce size, don't full exit)
+    IF exitScore >= 20  AND rMultiple > 0.5
+                        THEN action = TRAIL            (trail SL tighter)
+    ELSE                  action = CONTINUE             (hold)
+
+  EXAMPLES:
+    exitScore = 70 → EXIT    "Exit score 70 >= 60 — multiple confirmations"
+    exitScore = 50 → REDUCE  "Exit score 50 — reduce position size"
+    exitScore = 30, R = 1.0 → TRAIL   "Exit score 30 — trail stop loss"
+    exitScore = 10 → CONTINUE "Exit score 10 — continue holding"
+
+
+──────────────────────────────────────────────────────────────────────────────
+12.4  NO-SINGLE-INDICATOR RULE
+──────────────────────────────────────────────────────────────────────────────
+
+  No single component can trigger an EXIT on its own.
+
+  MAX single component = 25 points (Trend reversed)
+  EXIT threshold = 60 points
+  ∴ At least 3 components must fire to reach EXIT.
+
+  This prevents panic exits on one indicator change.
+
+
+================================================================================
+  BOOK 13 — STATE MACHINE RULES
+  (Phase 15: State Machine)
+================================================================================
+
+  10 STATES (no shortcuts):
+    WATCHLIST → READY → WAITING_ENTRY → ENTERED → TP1 → TP2 →
+    TRAILING → WEAKENING → EXIT → COMPLETE
+
+
+──────────────────────────────────────────────────────────────────────────────
+13.1  STATES
+──────────────────────────────────────────────────────────────────────────────
+
+  WATCHLIST      — Symbol is being monitored; no setup yet
+  READY          — Decision is ENTER or WAIT; setup is forming
+  WAITING_ENTRY  — Entry trigger is armed; waiting for price to hit trigger
+  ENTERED        — Trade is active; SL at initial level
+  TP1            — TP1 hit; SL moved to breakeven
+  TP2            — TP2 hit; 50% booked; trailing the rest
+  TRAILING       — Actively trailing SL as profit grows
+  WEAKENING      — Trade under pressure; watching for recovery or exit
+  EXIT           — Trade has been closed (SL hit or exit signal)
+  COMPLETE       — Trade fully resolved and archived to journal
+
+
+──────────────────────────────────────────────────────────────────────────────
+13.2  TRANSITIONS
+──────────────────────────────────────────────────────────────────────────────
+
+  FROM WATCHLIST:
+    decision = ENTER or WAIT  → READY
+    else                     → stay WATCHLIST
+
+  FROM READY:
+    decision = AVOID  → WATCHLIST (setup invalidated)
+    decision = ENTER  → WAITING_ENTRY (trigger armed)
+
+  FROM WAITING_ENTRY:
+    decision = AVOID  → WATCHLIST (setup invalidated before entry)
+    entry triggered   → ENTERED (user armed or price hit trigger)
+
+  FROM ENTERED:
+    exitAction = EXIT or hitSL      → EXIT
+    hitTP1                         → TP1
+    managementAction = MOVE_TO_BREAKEVEN → TP1
+    managementAction = FULL_EXIT   → EXIT
+    managementAction = WATCH       → WEAKENING
+    else                           → stay ENTERED
+
+  FROM TP1:
+    exitAction = EXIT  → EXIT
+    hitTP2             → TP2
+    managementAction = FULL_EXIT → EXIT
+    managementAction = TRAIL_SL  → TRAILING
+    managementAction = WATCH     → WEAKENING
+    else               → stay TP1
+
+  FROM TP2:
+    exitAction = EXIT  → EXIT
+    managementAction = FULL_EXIT → EXIT
+    managementAction = TRAIL_SL  → TRAILING
+    managementAction = WATCH     → WEAKENING
+    else               → stay TP2
+
+  FROM TRAILING:
+    exitAction = EXIT  → EXIT
+    managementAction = FULL_EXIT → EXIT (trailing SL hit)
+    managementAction = WATCH     → WEAKENING
+    else               → stay TRAILING
+
+  FROM WEAKENING:
+    exitAction = EXIT  → EXIT
+    managementAction = FULL_EXIT → EXIT
+    managementAction = TRAIL_SL  → TRAILING (recovered)
+    else               → stay WEAKENING
+
+  FROM EXIT:
+    always → COMPLETE
+
+
+──────────────────────────────────────────────────────────────────────────────
+13.3  UNIVERSAL EXIT TRIGGERS
+──────────────────────────────────────────────────────────────────────────────
+
+  These apply at ANY state (except WATCHLIST, COMPLETE):
+
+  (a) STOP LOSS HIT:
+      IF (isLong AND currentPrice <= stopLoss) OR (NOT isLong AND currentPrice >= stopLoss)
+        THEN state = EXIT, reason = "Stop loss hit"
+
+  (b) EXIT ENGINE = EXIT:
+      IF exitEngine.action = EXIT
+        THEN state = EXIT, reason = exitEngine.reason
+
+  (c) MANAGEMENT FULL_EXIT:
+      IF managementAction = FULL_EXIT
+        THEN state = EXIT, reason = managementAction.reason
+
+  NOTE: These override the normal state transitions.
+        A stop-loss hit always exits, regardless of current state.
+
+
+================================================================================
+  BOOK 14 — AI EXPLANATION RULES
+  (Phase 16: AI Explanation Engine)
+================================================================================
+
+──────────────────────────────────────────────────────────────────────────────
+14.1  AI NEVER DECIDES
+──────────────────────────────────────────────────────────────────────────────
+
+  RULE:
+    The AI Explanation Engine NEVER produces a decision.
+    It ONLY explains decisions made by the deterministic engines.
+
+  ENFORCEMENT:
+    - AI output never feeds back into any engine
+    - AI output is display-only
+    - If AI is unavailable, deterministic fallback explanations are used
+    - The system functions identically without AI
+
+
+──────────────────────────────────────────────────────────────────────────────
+14.2  EXPLANATION INPUTS
+──────────────────────────────────────────────────────────────────────────────
+
+  The AI receives the FULL deterministic engine output as context:
+
+  For decision explanations:
+    - Symbol, sector, direction
+    - Total score, confidence
+    - Market state, score, VIX
+    - Technical facts (top 4)
+    - Option chain summary (PCR, writing trends, max pain)
+    - Risk plan (entry, SL, TPs, RR, max loss)
+    - Decision + confidence
+    - All engine votes (engine, vote, weight, reason)
+    - Strike selection (primary strike, LTP, delta, IV)
+    - Entry plan (type, trigger)
+
+  For trade management explanations:
+    - Trade symbol, direction, state
+    - Entry/current prices (option + underlying)
+    - R-multiple, SL, TPs
+    - Management action + reason
+    - Exit score + action + reasons
+
+
+──────────────────────────────────────────────────────────────────────────────
+14.3  EXPLANATION MODES
+──────────────────────────────────────────────────────────────────────────────
+
+  MODE 1: explainDecision(rec, 'SELECTED')
+    Prompt: "Why was this selected as a top opportunity?"
+    Output: summary, whySelected[], riskNotes, coachingTip
+
+  MODE 2: explainDecision(rec, 'REJECTED')
+    Prompt: "Why was this rejected/deprioritized?"
+    Output: summary, whyRejected[], riskNotes, coachingTip
+
+  MODE 3: explainTradeManagement(trade, mgmt, exit)
+    Prompt: "Why is the engine recommending HOLD/TRAIL/EXIT?"
+    Output: summary, whyHolding[] or whyExiting[], riskNotes, coachingTip
+
+
+──────────────────────────────────────────────────────────────────────────────
+14.4  GROUNDING RULES
+──────────────────────────────────────────────────────────────────────────────
+
+  The AI MUST:
+    1. Reference specific engine votes and facts from the input
+    2. Never invent reasons not supported by the data
+    3. Never recommend actions (no "you should enter/exit")
+    4. Always include a risk note
+    5. Always end with a one-line coaching tip
+    6. Keep response under 250 words (decision) or 200 words (management)
+    7. Use bullet points for readability
+
+  SYSTEM PROMPT (exact):
+    "You are ODSS AI Coach — an options trading explainer for the Indian
+     market. You NEVER give trade recommendations or decisions. You ONLY
+     explain WHY the deterministic engine arrived at its decision.
+     Be concise, structured, and trader-friendly. Use bullet points.
+     Reference the engine votes and facts. Always include a risk note.
+     Always end with a one-line coaching tip."
+
+
+──────────────────────────────────────────────────────────────────────────────
+14.5  FALLBACK
+──────────────────────────────────────────────────────────────────────────────
+
+  IF LLM unavailable OR response empty:
+    Generate deterministic explanation from engine votes:
+
+    For SELECTED:
+      summary = "{symbol} {direction} — selected with {confidence}% confidence."
+      whySelected = aligned votes: "{engine} voted ENTER ({weight}%): {reason}"
+      riskNotes = "Max loss ₹{maxLoss} on {positionSize} lot(s). RR 1:{rr}."
+      coachingTip = "Wait for the entry trigger before executing — never chase price."
+
+    For REJECTED:
+      whyRejected = AVOID votes: "{engine}: {reason}"
+
+    For management:
+      summary = "{symbol} {direction} — {action}. R={rMultiple}. Exit score {exitScore}/100."
+      whyHolding = (if HOLD): ["Trade progressing normally", "R multiple {rMultiple}"]
+      whyExiting = (if FULL_EXIT or EXIT): [exit.reason, "Exit score {exitScore}/100"]
+      coachingTip = "Stick to the plan — do not exit on a single indicator change."
+
+
+================================================================================
+  BOOK 15 — CONFIGURATION DEFAULTS
+  (Phase 21: Configuration System)
+================================================================================
+
+  All values are configurable via the Config tab or /api/odss/config.
+  Defaults defined here. Changes take effect on next scan.
+
+
+──────────────────────────────────────────────────────────────────────────────
+15.1  ENGINE WEIGHTS  (must sum to 1.0)
+──────────────────────────────────────────────────────────────────────────────
+
+  weightMarket         0.15   (15%)
+  weightSector         0.10   (10%)
+  weightRS             0.10   (10%)
+  weightTechnical      0.25   (25%)
+  weightOptionChain    0.25   (25%)
+  weightRisk           0.15   (15%)
+
+  NOTE: If edits cause sum ≠ 1.0, weights are auto-normalized.
+
+
+──────────────────────────────────────────────────────────────────────────────
+15.2  RISK SETTINGS
+──────────────────────────────────────────────────────────────────────────────
+
+  riskPerTradePct      1.0    (% of capital risked per trade)
+  capital              200000 (₹)
+  lotSize              75     (NIFTY default; overridden per symbol)
+  minRR                2.0    (minimum reward:risk to consider ENTER)
+
+
+──────────────────────────────────────────────────────────────────────────────
+15.3  THRESHOLDS
+──────────────────────────────────────────────────────────────────────────────
+
+  minConfidenceEnter   65     (need 65%+ confidence to ENTER)
+  minConfidenceWait    45     (45%+ to WAIT)
+  scanIntervalMs       5000   (engine scan every 5 seconds)
+
+
+──────────────────────────────────────────────────────────────────────────────
+15.4  TRADE MANAGEMENT
+──────────────────────────────────────────────────────────────────────────────
+
+  trailATRMultiple     2.0    (trail SL at 2× ATR)
+  breakevenAtR         1.0    (move SL to breakeven at 1R profit)
+
+
+──────────────────────────────────────────────────────────────────────────────
+15.5  OPTION CHAIN
+──────────────────────────────────────────────────────────────────────────────
+
+  pcrBullish           1.2    (PCR above this = bullish signal)
+  pcrBearish           0.8    (PCR below this = bearish signal)
+
+
+──────────────────────────────────────────────────────────────────────────────
+15.6  VOLATILITY
+──────────────────────────────────────────────────────────────────────────────
+
+  vixHigh              18.0   (VIX above this = HIGH volatility)
+  vixExtreme           25.0   (VIX above this = EXTREME volatility)
+
+  AI:
+  enableAIExplanation  true   (toggle AI Coach on/off)
+
+
+================================================================================
+  APPENDIX A — SCORE QUICK REFERENCE
+================================================================================
+
+  ┌─────────────────────┬──────────────┬──────────────────────────────────┐
+  │ SCORE               │ RANGE        │ MEANING                          │
+  ├─────────────────────┼──────────────┼──────────────────────────────────┤
+  │ marketScore         │ −100..+100   │ bullish/bearish market bias      │
+  │ marketConfidence    │ 0..100       │ how aligned market signals are   │
+  │ sector.strength     │ −100..+100   │ bullish/bearish sector bias      │
+  │ sector.score        │ 0..100       │ normalized sector quality        │
+  │ rs.rsScore          │ −100..+100   │ stock RS vs market+sector        │
+  │ rs.score            │ 0..100       │ normalized RS quality            │
+  │ technical.score     │ 0..100       │ technical setup quality          │
+  │ optionChain.score   │ 0..100       │ option chain quality             │
+  │ opportunity.total   │ 0..100       │ weighted total (all engines)     │
+  │ opportunity.conf    │ 0..100       │ engine alignment confidence      │
+  │ decision.confidence │ 0..100       │ final decision confidence        │
+  │ exit.exitScore      │ 0..100       │ likelihood of exit (higher=exit) │
+  │ rMultiple           │ any real     │ profit/loss in R units           │
+  └─────────────────────┴──────────────┴──────────────────────────────────┘
+
+
+================================================================================
+  APPENDIX B — DECISION FLOW CHEAT SHEET
+================================================================================
+
+  SCAN → Market Engine → Sector Engine → RS Engine
+       → For each symbol: Technical + Option Chain
+       → Opportunity Engine (ranks all)
+       → For top 10: Strike + Entry + Risk + Decision
+       → If active trade: Management + Exit + State Machine
+       → Persist + Broadcast
+
+  DECISION = weighted vote of 6 engines
+    ENTER if aggregate >= 0.70
+    WAIT  if aggregate >= 0.40
+    WATCH if aggregate >= 0.10
+    AVOID if aggregate  < 0.10
+    (AVOID votes count −1.5×)
+
+  ENTRY = first matching setup (priority order):
+    1. Liquidity Sweep (highest probability)
+    2. Breakout
+    3. Retest
+    4. VWAP
+    5. Wait for VWAP (never chase)
+
+  EXIT = exitScore >= 60 (requires 3+ components)
+    Hold      if exitScore < 40
+    Trail     if exitScore 20-40 and R > 0.5
+    Reduce    if exitScore 40-60
+    Exit      if exitScore >= 60
+
+  STATE MACHINE:
+    WATCHLIST → READY → WAITING_ENTRY → ENTERED → TP1 → TP2 →
+    TRAILING → WEAKENING → EXIT → COMPLETE
+    (SL hit or Exit Engine = EXIT → EXIT at any state)
+
+
+================================================================================
+  END OF RULEBOOK
+================================================================================
+
+  This document is the single source of truth for trading logic.
+  If the code and this book disagree, THIS BOOK IS CORRECT.
+
+  Companion document: ODSS_Architecture_Documentation.txt
+    (covers what components exist and how they connect)
+
+  — ODSS Trading Intelligence Rulebook v1.0 —
