@@ -13,10 +13,12 @@ import { EngineVotesPanel } from '@/components/odss/dashboard/engine-votes-panel
 import { DecisionLog } from '@/components/odss/dashboard/decision-log';
 import { AIExplainer } from '@/components/odss/dashboard/ai-explainer';
 import { RecommendationDrawer } from '@/components/odss/dashboard/recommendation-drawer';
+import { GuardrailBar } from '@/components/odss/dashboard/guardrail-bar';
 import { JournalTable } from '@/components/odss/journal/journal-table';
 import { AnalyticsDashboard } from '@/components/odss/analytics/analytics-dashboard';
 import { ConfigPanel } from '@/components/odss/config/config-panel';
-import { Activity, LayoutDashboard, Trophy, BookOpen, BarChart3, Settings, RefreshCw, Radio, Zap } from 'lucide-react';
+import { ReplayValidationPanel } from '@/components/odss/replay/replay-panel';
+import { Activity, LayoutDashboard, Trophy, BookOpen, BarChart3, Settings, RefreshCw, Radio, Zap, FlaskConical } from 'lucide-react';
 import type { Recommendation } from '@/lib/odss/types';
 
 export default function ODSSPage() {
@@ -71,13 +73,17 @@ export default function ODSSPage() {
       {/* Main content */}
       <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-4">
         <Tabs defaultValue="dashboard">
-          <TabsList className="mb-4 grid w-full grid-cols-2 sm:grid-cols-5">
+          <TabsList className="mb-4 grid w-full grid-cols-2 sm:grid-cols-6">
             <TabsTrigger value="dashboard" className="gap-1.5"><LayoutDashboard className="h-3.5 w-3.5" /> Dashboard</TabsTrigger>
             <TabsTrigger value="opportunities" className="gap-1.5"><Trophy className="h-3.5 w-3.5" /> Opportunities</TabsTrigger>
             <TabsTrigger value="journal" className="gap-1.5"><BookOpen className="h-3.5 w-3.5" /> Journal</TabsTrigger>
             <TabsTrigger value="analytics" className="gap-1.5"><BarChart3 className="h-3.5 w-3.5" /> Analytics</TabsTrigger>
+            <TabsTrigger value="validation" className="gap-1.5"><FlaskConical className="h-3.5 w-3.5" /> Validation</TabsTrigger>
             <TabsTrigger value="config" className="gap-1.5"><Settings className="h-3.5 w-3.5" /> Config</TabsTrigger>
           </TabsList>
+
+          {/* Guardrail status bar (always visible) */}
+          <div className="mb-4"><GuardrailBar /></div>
 
           {/* DASHBOARD TAB */}
           <TabsContent value="dashboard" className="space-y-4">
@@ -122,6 +128,18 @@ export default function ODSSPage() {
           {/* ANALYTICS TAB */}
           <TabsContent value="analytics" className="space-y-4">
             <AnalyticsDashboard />
+          </TabsContent>
+
+          {/* VALIDATION TAB */}
+          <TabsContent value="validation" className="space-y-4">
+            <div className="grid gap-4 lg:grid-cols-3">
+              <div className="lg:col-span-2">
+                <ReplayValidationPanel />
+              </div>
+              <div>
+                <DecisionLog />
+              </div>
+            </div>
           </TabsContent>
 
           {/* CONFIG TAB */}

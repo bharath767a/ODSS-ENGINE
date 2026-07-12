@@ -29,6 +29,17 @@ export interface ODSSState {
   optionChain: any | null;
   connected: boolean;
   lastUpdate: number;
+  // Recording status
+  recording: boolean;
+  // Guardrails
+  guardrails: {
+    tradesToday: number;
+    maxTradesPerDay: number;
+    realizedPnlToday: number;
+    maxDailyLossRupees: number;
+    profitCapRupees: number;
+    remainingTrades: number;
+  } | null;
 }
 
 const initialState: ODSSState = {
@@ -47,6 +58,8 @@ const initialState: ODSSState = {
   optionChain: null,
   connected: false,
   lastUpdate: 0,
+  recording: false,
+  guardrails: null,
 };
 
 let socket: Socket | null = null;
@@ -116,6 +129,8 @@ function connect() {
       bankNifty: data.bankNifty ?? currentState.bankNifty,
       liveQuotes,
       lastUpdate: Date.now(),
+      recording: data.recording ?? currentState.recording,
+      guardrails: data.guardrails ?? currentState.guardrails,
     };
     emit();
   });
@@ -133,11 +148,16 @@ function emit() {
 }
 
 export function useODSS(): ODSSState & {
-  enterTrade: (symbol: string, direction: 'CE' | 'PE') => Promise<{ ok: boolean; error?: string }>;
+  enterTrade: (symbol: string, direction: 'CE' | 'PE') => Promise<{ ok: boolean; error?: string; guardrail?: string }>;
   exitTrade: (reason?: string) => Promise<{ ok: boolean; error?: string }>;
   focusSymbol: (symbol: string) => void;
   resetSimulator: () => Promise<void>;
   manualScan: () => void;
+  // Replay / validation
+  startRecording: (name?: string) => Promise<{ ok: boolean; sessionId?: string; error?: string }>;
+  stopRecording: () => Promise<{ ok: boolean; tickCount?: number; scanCount?: number; error?: string }>;
+  listSessions: () => Promise<{ ok: boolean; sessions?: any[]; error?: string }>;
+  validateSession: (sessionId: string) => Promise<{ ok: boolean; report?: any; error?: string }>;
 } {
   const [state, setState] = useState<ODSSState>(currentState);
 
@@ -152,7 +172,7 @@ export function useODSS(): ODSSState & {
   }, []);
 
   const enterTrade = useCallback((symbol: string, direction: 'CE' | 'PE') => {
-    return new Promise<{ ok: boolean; error?: string }>((resolve) => {
+    return new Promise<{ ok: boolean; error?: string; guardrail?: string }>((resolve) => {
       if (!socket) return resolve({ ok: false, error: 'Not connected' });
       socket.emit('trade:enter', { symbol, direction }, (res: any) => {
         resolve(res ?? { ok: false, error: 'No response' });
@@ -184,5 +204,41 @@ export function useODSS(): ODSSState & {
     socket?.emit('manual:scan');
   }, []);
 
-  return { ...state, enterTrade, exitTrade, focusSymbol, resetSimulator, manualScan };
+  const startRecording = useCallback((name?: string) => {
+    return new Promise<{ ok: boolean; sessionId?: string; error?: string }>((resolve) => {
+      if (!socket) return resolve({ ok: false, error: 'Not connected' });
+      socket.emit('replay:start', { name }, (res: any) => {
+        resolve(res ?? { ok: false, error: 'No response' });
+      });
+    });
+  }, []);
+
+  const stopRecording = useCallback(() => {
+    return new Promise<{ ok: boolean; tickCount?: number; scanCount?: number; error?: string }>((resolve) => {
+      if (!socket) return resolve({ ok: false, error: 'Not connected' });
+      socket.emit('replay:stop', {}, (res: any) => {
+        resolve(res ?? { ok: false, error: 'No response' });
+      });
+    });
+  }, []);
+
+  const listSessions = useCallback(() => {
+    return new Promise<{ ok: boolean; sessions?: any[]; error?: string }>((resolve) => {
+      if (!socket) return resolve({ ok: false, error: 'Not connected' });
+      socket.emit('replay:sessions', {}, (res: any) => {
+        resolve(res ?? { ok: false, error: 'No response' });
+      });
+    });
+  }, []);
+
+  const validateSession = useCallback((sessionId: string) => {
+    return new Promise<{ ok: boolean; report?: any; error?: string }>((resolve) => {
+      if (!socket) return resolve({ ok: false, error: 'Not connected' });
+      socket.emit('replay:validate', { sessionId }, (res: any) => {
+        resolve(res ?? { ok: false, error: 'No response' });
+      });
+    });
+  }, []);
+
+  return { ...state, enterTrade, exitTrade, focusSymbol, resetSimulator, manualScan, startRecording, stopRecording, listSessions, validateSession };
 }

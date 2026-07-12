@@ -86,3 +86,39 @@ Stage Summary:
 - AI explanations via LLM working for both selection and rejection reasoning
 - All data persisted to SQLite via Prisma
 - Configuration fully editable via UI
+
+---
+Task ID: V1.1+M2
+Agent: main
+Task: V1.1 enhancements (Guardrails, Uncertainty, Stability) + Milestone 2 (Replay/Validation framework)
+
+Work Log:
+- Reviewed EdgeFlo.com (Forex discipline tool) — borrowed guardrails concept only
+- Built GuardrailEngine: max trades/day, max daily loss, profit cap, near-close block, correlation check
+- Built StabilityTracker: decision stability (flip-flop detection) + uncertainty classification (AVOID vs NO_TRADE_UNCERTAIN)
+- Built Replay Recorder: records every tick + scan to DB (ReplaySession, ReplayTick, ReplayScan models)
+- Built Validation Report Generator: measures decision distribution, ENTER win rate, avg R-multiple, engine contribution, decision stability
+- Added 4 new Prisma models: ReplaySession, ReplayTick, ReplayScan, ValidationReport
+- Extended Configuration with guardrail params (maxTradesPerDay, maxDailyLossPct, profitCapPct, noEntryAfterMinutes)
+- Wired recorder into mini-service tick/scan loops (opt-in via socket event)
+- Added 6 new socket handlers: replay:start/stop/status/sessions/validate, guardrails:status
+- Updated use-odss hook with startRecording, stopRecording, listSessions, validateSession
+- Built ReplayValidationPanel UI: recording controls, session list, validation report card with engine contribution bars
+- Built GuardrailBar UI: always-visible status bar showing trades/loss/profit usage
+- Added "Validation" tab to main dashboard (6 tabs now)
+- Added guardrail settings to Config panel
+
+Verification (Agent Browser):
+- Guardrail bar visible: "Trades 0/3, Loss ₹0/₹6000, Profit ₹0/₹10000, 3 entries remaining"
+- Recorded 21-tick / 12-scan session (63s)
+- Validation report generated: 2 ENTER decisions, 100% win rate, +1.00R avg
+- Engine contribution shown: RS/Technical/OptionChain all 100% on winning ENTERs
+- Decision stability: 66.7% (1 flip)
+- Best opportunity: HINDUNILVR (score 75)
+- Correlation guardrail blocks correlated entries (e.g., can't enter HDFCBANK if already long BANKNIFTY)
+
+Stage Summary:
+- V1.1 complete: guardrails + uncertainty + stability (all simple, non-structural)
+- Milestone 2 complete: replay recording + validation report generator
+- System can now answer: "Which engines actually contribute to winning trades?"
+- Next: connect real broker data for historical validation (Milestone 2 Phase B)

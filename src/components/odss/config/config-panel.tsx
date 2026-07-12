@@ -156,6 +156,28 @@ export function ConfigPanel() {
         </CardContent>
       </Card>
 
+      <Card>
+        <CardHeader className="pb-2"><CardTitle className="text-sm">Guardrails (Discipline Enforcement)</CardTitle></CardHeader>
+        <CardContent className="grid grid-cols-2 gap-3">
+          <div>
+            <Label className="text-xs">Max trades per day</Label>
+            <Input type="number" value={config.maxTradesPerDay} onChange={(e) => update({ maxTradesPerDay: +e.target.value })} />
+          </div>
+          <div>
+            <Label className="text-xs">Max daily loss (%)</Label>
+            <Input type="number" step="0.1" value={config.maxDailyLossPct} onChange={(e) => update({ maxDailyLossPct: +e.target.value })} />
+          </div>
+          <div>
+            <Label className="text-xs">Profit cap (%)</Label>
+            <Input type="number" step="0.1" value={config.profitCapPct} onChange={(e) => update({ profitCapPct: +e.target.value })} />
+          </div>
+          <div>
+            <Label className="text-xs">No entry X min before close</Label>
+            <Input type="number" value={config.noEntryAfterMinutes} onChange={(e) => update({ noEntryAfterMinutes: +e.target.value })} />
+          </div>
+        </CardContent>
+      </Card>
+
       <div className="flex gap-2">
         <Button onClick={save} disabled={saving}>
           <Save className="mr-2 h-4 w-4" /> {saving ? 'Saving…' : 'Save Configuration'}

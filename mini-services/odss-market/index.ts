@@ -16,6 +16,9 @@ import { tick, getQuote, getAllQuotes, getIndiaVix, getMarketBreadth, getOptionC
 import { runScan, enterTrade, exitTrade } from '../../src/lib/odss/orchestrator';
 import { getStore, loadActiveTradeFromDb } from '../../src/lib/odss/store/store';
 import { getConfig } from '../../src/lib/odss/config';
+import { startRecording, stopRecording, recordTick, recordScan, isRecording, listSessions, getCurrentSessionId } from '../../src/lib/odss/replay/recorder';
+import { generateValidationReport } from '../../src/lib/odss/replay/validator';
+import { checkGuardrails, registerTradeEntry, registerTradeExit, getGuardrailStatus } from '../../src/lib/odss/engines/guardrails-engine';
 import type { Direction } from '../../src/lib/odss/types';
 
 const PORT = 3002;
@@ -61,11 +64,20 @@ setInterval(async () => {
   if (!ticking) return;
   try {
     tick();
+    // Record tick if session is active
+    if (isRecording()) {
+      await recordTick();
+    }
     const quotes = getAllQuotes().slice(0, 30); // top 30 for UI
     const nifty = getQuote('NIFTY');
     const bankNifty = getQuote('BANKNIFTY');
     const vix = getIndiaVix();
     const breadth = getMarketBreadth();
+
+    // Broadcast guardrail status
+    const config = await getConfig();
+    const guardrails = getGuardrailStatus(config);
+
     io.emit('market:tick', {
       timestamp: Date.now(),
       vix,
@@ -80,6 +92,8 @@ setInterval(async () => {
         vwap: q.vwap,
         volume: q.volume,
       })),
+      guardrails,
+      recording: isRecording(),
     });
   } catch (e) {
     console.error('[odss-market] Tick error:', e.message);
@@ -91,6 +105,10 @@ setInterval(async () => {
   if (!scanning) return;
   try {
     await runScan();
+    // Record scan if session is active
+    if (isRecording()) {
+      await recordScan();
+    }
     const store = getStore();
     io.emit('odss:update', {
       timestamp: Date.now(),
@@ -101,6 +119,7 @@ setInterval(async () => {
       activeTrade: store.activeTrade,
       topRecommendations: Array.from(store.recommendations.values()).slice(0, 10),
       decisionLog: store.decisionLog.slice(0, 20),
+      recording: isRecording(),
     });
   } catch (e) {
     console.error('[odss-market] Scan error:', e.message);
@@ -180,10 +199,17 @@ io.on('connection', (socket) => {
   // Trade mutations with acknowledgement (frontend uses emit + ack)
   socket.on('trade:enter', async (payload: { symbol: string; direction: Direction }, ack?: (res: any) => void) => {
     try {
+      // Guardrail check before entry
+      const config = await getConfig();
+      const guardrail = await checkGuardrails(payload.symbol.toUpperCase(), payload.direction, config);
+      if (!guardrail.allowed) {
+        if (ack) ack({ ok: false, error: guardrail.reason, guardrail: guardrail.guardrail });
+        return;
+      }
       const trade = await enterTrade(payload.symbol.toUpperCase(), payload.direction);
-      // Broadcast updated state to all clients
+      registerTradeEntry();
       broadcastUpdate();
-      if (ack) ack({ ok: true, trade });
+      if (ack) ack({ ok: true, trade, warnings: guardrail.warnings });
     } catch (e: any) {
       if (ack) ack({ ok: false, error: e.message });
     }
@@ -191,11 +217,77 @@ io.on('connection', (socket) => {
 
   socket.on('trade:exit', async (payload: { reason?: string }, ack?: (res: any) => void) => {
     try {
+      const store = getStore();
+      const trade = store.activeTrade;
+      const pnl = trade?.pnl ?? 0;
       await exitTrade(payload.reason || 'Manual exit via dashboard');
+      registerTradeExit(pnl);
       broadcastUpdate();
       if (ack) ack({ ok: true });
     } catch (e: any) {
       if (ack) ack({ ok: false, error: e.message });
+    }
+  });
+
+  // ====== REPLAY / VALIDATION HANDLERS ======
+
+  socket.on('replay:start', async (payload: { name?: string }, ack?: (res: any) => void) => {
+    try {
+      const sessionId = await startRecording(payload.name);
+      console.log(`[odss-market] Recording started: ${sessionId}`);
+      if (ack) ack({ ok: true, sessionId });
+    } catch (e: any) {
+      if (ack) ack({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('replay:stop', async (_payload: any, ack?: (res: any) => void) => {
+    const cb = typeof _payload === 'function' ? _payload : ack;
+    try {
+      const result = await stopRecording();
+      console.log(`[odss-market] Recording stopped: ${result.sessionId} (${result.tickCount} ticks, ${result.scanCount} scans)`);
+      if (cb) cb({ ok: true, ...result });
+    } catch (e: any) {
+      if (cb) cb({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('replay:status', (_payload: any, ack?: (res: any) => void) => {
+    // Handle case where ack is the first arg (no payload sent)
+    const cb = typeof _payload === 'function' ? _payload : ack;
+    if (cb) cb({ recording: isRecording(), sessionId: getCurrentSessionId() });
+  });
+
+  socket.on('replay:sessions', async (_payload: any, ack?: (res: any) => void) => {
+    const cb = typeof _payload === 'function' ? _payload : ack;
+    try {
+      const sessions = await listSessions();
+      if (cb) cb({ ok: true, sessions });
+    } catch (e: any) {
+      if (cb) cb({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on('replay:validate', async (payload: { sessionId: string }, ack?: (res: any) => void) => {
+    try {
+      console.log(`[odss-market] Generating validation report for session ${payload.sessionId}...`);
+      const report = await generateValidationReport(payload.sessionId);
+      console.log(`[odss-market] Validation report generated: ${report.decisions.ENTER} ENTERs, ${report.enterOutcomes.winRate} win rate`);
+      if (ack) ack({ ok: true, report });
+    } catch (e: any) {
+      console.error('[odss-market] Validation error:', e.message);
+      if (ack) ack({ ok: false, error: e.message });
+    }
+  });
+
+  // Guardrail status
+  socket.on('guardrails:status', async (ack?: (res: any) => void) => {
+    try {
+      const config = await getConfig();
+      const status = getGuardrailStatus(config);
+      if (ack) ack(status);
+    } catch (e: any) {
+      if (ack) ack({ error: e.message });
     }
   });
 

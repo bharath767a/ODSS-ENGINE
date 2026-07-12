@@ -35,6 +35,11 @@ export interface ODSSConfig {
   pcrBearish: number;
   // AI
   enableAIExplanation: boolean;
+  // Guardrails (V1.1)
+  maxTradesPerDay: number;
+  maxDailyLossPct: number;
+  profitCapPct: number;
+  noEntryAfterMinutes: number;
 }
 
 export const DEFAULT_CONFIG: ODSSConfig = {
@@ -59,6 +64,10 @@ export const DEFAULT_CONFIG: ODSSConfig = {
   pcrBullish: 1.2,
   pcrBearish: 0.8,
   enableAIExplanation: true,
+  maxTradesPerDay: 3,
+  maxDailyLossPct: 3.0,
+  profitCapPct: 5.0,
+  noEntryAfterMinutes: 30,
 };
 
 // In-memory cache for the active config so we don't hit the DB every tick
@@ -130,6 +139,10 @@ export async function updateConfig(patch: Partial<ODSSConfig>): Promise<ODSSConf
         pcrBullish: next.pcrBullish,
         pcrBearish: next.pcrBearish,
         enableAIExplanation: next.enableAIExplanation,
+        maxTradesPerDay: next.maxTradesPerDay,
+        maxDailyLossPct: next.maxDailyLossPct,
+        profitCapPct: next.profitCapPct,
+        noEntryAfterMinutes: next.noEntryAfterMinutes,
       },
       create: {
         id: 'default',
@@ -153,6 +166,10 @@ export async function updateConfig(patch: Partial<ODSSConfig>): Promise<ODSSConf
         pcrBullish: next.pcrBullish,
         pcrBearish: next.pcrBearish,
         enableAIExplanation: next.enableAIExplanation,
+        maxTradesPerDay: next.maxTradesPerDay,
+        maxDailyLossPct: next.maxDailyLossPct,
+        profitCapPct: next.profitCapPct,
+        noEntryAfterMinutes: next.noEntryAfterMinutes,
       },
     });
   } catch (e) {

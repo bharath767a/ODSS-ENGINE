@@ -310,5 +310,89 @@ model Configuration {
   pcrBearish         Float @default(0.8)
   // AI
   enableAIExplanation Boolean @default(true)
+  // Guardrails (V1.1 — discipline enforcement)
+  maxTradesPerDay    Int   @default(3)
+  maxDailyLossPct    Float @default(3.0)   // % of capital
+  profitCapPct       Float @default(5.0)   // stop when up this %
+  noEntryAfterMinutes Int  @default(30)    // no new entries X min before close
   updatedAt     DateTime @updatedAt
+}
+
+// ============================================================
+// REPLAY FRAMEWORK (Milestone 2 — Validation)
+// Records every tick + engine output for deterministic replay
+// ============================================================
+model ReplaySession {
+  id            String   @id @default(cuid())
+  name          String
+  startTime     DateTime @default(now())
+  endTime       DateTime?
+  tickCount     Int      @default(0)
+  scanCount     Int      @default(0)
+  status        String   @default("RECORDING") // RECORDING | COMPLETE | REPLAYING
+  // Summary stats (filled when session ends)
+  finalNifty    Float?
+  finalVix      Float?
+  regimeHistory String?  // JSON array of {regime, startTick, endTick}
+  @@index([startTime])
+}
+
+model ReplayTick {
+  id            String   @id @default(cuid())
+  sessionId     String
+  tickNumber    Int
+  timestamp     DateTime @default(now())
+  // Market state at this tick
+  vix           Float
+  // JSON snapshots of all symbol quotes at this tick
+  quotes        String   // JSON: {symbol: {ltp, changePct, vwap, volume}}
+  breadth       String   // JSON: {advance, decline, ratio}
+  @@index([sessionId, tickNumber])
+}
+
+model ReplayScan {
+  id            String   @id @default(cuid())
+  sessionId     String
+  scanNumber    Int
+  tickNumber    Int      // which tick this scan ran on
+  timestamp     DateTime @default(now())
+  // Full engine outputs (JSON)
+  market        String?  // MarketEngineOutput JSON
+  sectors       String?  // SectorEngineOutput JSON
+  opportunities String?  // OpportunityEngineOutput JSON
+  // Top recommendation snapshot
+  topSymbol     String?
+  topDirection  String?
+  topScore      Float?
+  topDecision   String?
+  topConfidence Float?
+  // Full recommendations for top 10 (JSON)
+  recommendations String? // JSON array of Recommendation
+  @@index([sessionId, scanNumber])
+}
+
+model ValidationReport {
+  id            String   @id @default(cuid())
+  sessionId     String
+  generatedAt   DateTime @default(now())
+  // Overall metrics
+  totalScans    Int
+  totalEnter    Int
+  totalWait     Int
+  totalWatch    Int
+  totalAvoid    Int
+  // Decision stability (how often decision flipped)
+  avgStability  Float    // 0..1, higher = more stable
+  flipCount     Int      // number of decision changes
+  // Engine contribution (win rate with vs without each engine)
+  // Measured by: for each ENTER decision, did price reach TP1 before SL?
+  enterWinRate  Float    // % of ENTER decisions that hit TP1
+  enterLossRate Float    // % of ENTER decisions that hit SL
+  avgRMultiple  Float    // avg R-multiple if all ENTERs were taken
+  // Per-engine contribution (JSON: {engine: winRateWithout})
+  engineContribution String?
+  // Session summary
+  bestOpportunity  String? // symbol that had highest score
+  worstDecision    String? // description of worst decision
+  @@index([sessionId])
 }
