@@ -17,10 +17,18 @@ export function ConfigPanel() {
   const { toast } = useToast();
 
   useEffect(() => {
-    fetch('/api/odss/config').then((r) => r.json()).then(setConfig);
+    fetch('/api/odss/config')
+      .then((r) => r.json())
+      .then(setConfig);
   }, []);
 
-  if (!config) return <div className="py-8 text-center text-sm text-slate-400">Loading config…</div>;
+  if (!config) {
+    return (
+      <div className="py-8 text-center font-mono text-sm text-muted-foreground">
+        Loading config…
+      </div>
+    );
+  }
 
   const update = (patch: Partial<ODSSConfig>) => setConfig({ ...config, ...patch });
 
@@ -35,7 +43,10 @@ export function ConfigPanel() {
       const data = await res.json();
       if (data.ok) {
         setConfig(data.config);
-        toast({ title: 'Configuration saved', description: 'Engine weights and thresholds updated.' });
+        toast({
+          title: 'Configuration saved',
+          description: 'Engine weights and thresholds updated.',
+        });
       } else {
         toast({ title: 'Save failed', description: data.error, variant: 'destructive' });
       }
@@ -45,16 +56,23 @@ export function ConfigPanel() {
   };
 
   const reset = () => {
-    fetch('/api/odss/config').then((r) => r.json()).then(setConfig);
+    fetch('/api/odss/config')
+      .then((r) => r.json())
+      .then(setConfig);
   };
 
   return (
-    <div className="space-y-4">
-      <Card>
+    <div className="space-y-3">
+      <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
         <CardHeader className="pb-2">
           <CardTitle className="flex items-center justify-between text-sm">
-            <span className="flex items-center gap-2"><Settings className="h-4 w-4 text-slate-500" /> Engine Weights</span>
-            <span className="text-xs text-slate-400">Sum normalizes to 100%</span>
+            <span className="flex items-center gap-2 font-mono tracking-wide text-muted-foreground">
+              <Settings className="h-4 w-4 text-info" />
+              <span className="text-foreground">ENGINE WEIGHTS</span>
+            </span>
+            <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+              Sum normalizes to 100%
+            </span>
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
@@ -67,9 +85,11 @@ export function ConfigPanel() {
             { key: 'weightRisk', label: 'Risk' },
           ].map(({ key, label }) => (
             <div key={key}>
-              <div className="mb-1 flex justify-between text-xs">
-                <Label>{label}</Label>
-                <span className="font-mono text-slate-500">{((config as any)[key] * 100).toFixed(0)}%</span>
+              <div className="mb-1 flex justify-between font-mono text-xs">
+                <Label className="text-foreground/80">{label}</Label>
+                <span className="tnum text-info">
+                  {((config as any)[key] * 100).toFixed(0)}%
+                </span>
               </div>
               <Slider
                 value={[(config as any)[key] * 100]}
@@ -83,109 +103,189 @@ export function ConfigPanel() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-sm">Risk Settings</CardTitle></CardHeader>
+      <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+        <CardHeader className="pb-2">
+          <CardTitle className="font-mono text-sm tracking-wide text-foreground">
+            RISK SETTINGS
+          </CardTitle>
+        </CardHeader>
         <CardContent className="grid grid-cols-2 gap-3">
-          <div>
-            <Label className="text-xs">Capital (₹)</Label>
-            <Input type="number" value={config.capital} onChange={(e) => update({ capital: +e.target.value })} />
-          </div>
-          <div>
-            <Label className="text-xs">Risk per trade (%)</Label>
-            <Input type="number" step="0.1" value={config.riskPerTradePct} onChange={(e) => update({ riskPerTradePct: +e.target.value })} />
-          </div>
-          <div>
-            <Label className="text-xs">Min RR</Label>
-            <Input type="number" step="0.1" value={config.minRR} onChange={(e) => update({ minRR: +e.target.value })} />
-          </div>
-          <div>
-            <Label className="text-xs">Lot size</Label>
-            <Input type="number" value={config.lotSize} onChange={(e) => update({ lotSize: +e.target.value })} />
-          </div>
+          <ConfigField
+            label="Capital (₹)"
+            value={config.capital}
+            onChange={(v) => update({ capital: v })}
+          />
+          <ConfigField
+            label="Risk per trade (%)"
+            value={config.riskPerTradePct}
+            step="0.1"
+            onChange={(v) => update({ riskPerTradePct: v })}
+          />
+          <ConfigField
+            label="Min RR"
+            value={config.minRR}
+            step="0.1"
+            onChange={(v) => update({ minRR: v })}
+          />
+          <ConfigField
+            label="Lot size"
+            value={config.lotSize}
+            onChange={(v) => update({ lotSize: v })}
+          />
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-sm">Thresholds</CardTitle></CardHeader>
+      <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+        <CardHeader className="pb-2">
+          <CardTitle className="font-mono text-sm tracking-wide text-foreground">
+            THRESHOLDS
+          </CardTitle>
+        </CardHeader>
         <CardContent className="grid grid-cols-2 gap-3">
-          <div>
-            <Label className="text-xs">Min confidence to ENTER</Label>
-            <Input type="number" value={config.minConfidenceEnter} onChange={(e) => update({ minConfidenceEnter: +e.target.value })} />
-          </div>
-          <div>
-            <Label className="text-xs">Min confidence to WAIT</Label>
-            <Input type="number" value={config.minConfidenceWait} onChange={(e) => update({ minConfidenceWait: +e.target.value })} />
-          </div>
-          <div>
-            <Label className="text-xs">VIX High threshold</Label>
-            <Input type="number" step="0.1" value={config.vixHigh} onChange={(e) => update({ vixHigh: +e.target.value })} />
-          </div>
-          <div>
-            <Label className="text-xs">VIX Extreme threshold</Label>
-            <Input type="number" step="0.1" value={config.vixExtreme} onChange={(e) => update({ vixExtreme: +e.target.value })} />
-          </div>
-          <div>
-            <Label className="text-xs">PCR Bullish</Label>
-            <Input type="number" step="0.1" value={config.pcrBullish} onChange={(e) => update({ pcrBullish: +e.target.value })} />
-          </div>
-          <div>
-            <Label className="text-xs">PCR Bearish</Label>
-            <Input type="number" step="0.1" value={config.pcrBearish} onChange={(e) => update({ pcrBearish: +e.target.value })} />
-          </div>
-          <div>
-            <Label className="text-xs">Trail ATR multiple</Label>
-            <Input type="number" step="0.1" value={config.trailATRMultiple} onChange={(e) => update({ trailATRMultiple: +e.target.value })} />
-          </div>
-          <div>
-            <Label className="text-xs">Scan interval (ms)</Label>
-            <Input type="number" value={config.scanIntervalMs} onChange={(e) => update({ scanIntervalMs: +e.target.value })} />
-          </div>
+          <ConfigField
+            label="Min confidence to ENTER"
+            value={config.minConfidenceEnter}
+            onChange={(v) => update({ minConfidenceEnter: v })}
+          />
+          <ConfigField
+            label="Min confidence to WAIT"
+            value={config.minConfidenceWait}
+            onChange={(v) => update({ minConfidenceWait: v })}
+          />
+          <ConfigField
+            label="VIX High threshold"
+            value={config.vixHigh}
+            step="0.1"
+            onChange={(v) => update({ vixHigh: v })}
+          />
+          <ConfigField
+            label="VIX Extreme threshold"
+            value={config.vixExtreme}
+            step="0.1"
+            onChange={(v) => update({ vixExtreme: v })}
+          />
+          <ConfigField
+            label="PCR Bullish"
+            value={config.pcrBullish}
+            step="0.1"
+            onChange={(v) => update({ pcrBullish: v })}
+          />
+          <ConfigField
+            label="PCR Bearish"
+            value={config.pcrBearish}
+            step="0.1"
+            onChange={(v) => update({ pcrBearish: v })}
+          />
+          <ConfigField
+            label="Trail ATR multiple"
+            value={config.trailATRMultiple}
+            step="0.1"
+            onChange={(v) => update({ trailATRMultiple: v })}
+          />
+          <ConfigField
+            label="Scan interval (ms)"
+            value={config.scanIntervalMs}
+            onChange={(v) => update({ scanIntervalMs: v })}
+          />
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-sm">AI Coach</CardTitle></CardHeader>
+      <Card className="border-ai/30 bg-card/50 backdrop-blur-sm">
+        <CardHeader className="pb-2">
+          <CardTitle className="font-mono text-sm tracking-wide text-foreground">AI COACH</CardTitle>
+        </CardHeader>
         <CardContent>
           <div className="flex items-center justify-between">
             <div>
-              <Label>Enable AI Explanations</Label>
-              <p className="text-xs text-slate-400">Uses LLM to explain engine decisions (Phase 16).</p>
+              <Label className="text-foreground/80">Enable AI Explanations</Label>
+              <p className="font-mono text-[10px] text-muted-foreground">
+                Uses LLM to explain engine decisions (Phase 16).
+              </p>
             </div>
-            <Switch checked={config.enableAIExplanation} onCheckedChange={(v) => update({ enableAIExplanation: v })} />
+            <Switch
+              checked={config.enableAIExplanation}
+              onCheckedChange={(v) => update({ enableAIExplanation: v })}
+            />
           </div>
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader className="pb-2"><CardTitle className="text-sm">Guardrails (Discipline Enforcement)</CardTitle></CardHeader>
+      <Card className="border-warn/30 bg-card/50 backdrop-blur-sm">
+        <CardHeader className="pb-2">
+          <CardTitle className="font-mono text-sm tracking-wide text-foreground">
+            GUARDRAILS · DISCIPLINE ENFORCEMENT
+          </CardTitle>
+        </CardHeader>
         <CardContent className="grid grid-cols-2 gap-3">
-          <div>
-            <Label className="text-xs">Max trades per day</Label>
-            <Input type="number" value={config.maxTradesPerDay} onChange={(e) => update({ maxTradesPerDay: +e.target.value })} />
-          </div>
-          <div>
-            <Label className="text-xs">Max daily loss (%)</Label>
-            <Input type="number" step="0.1" value={config.maxDailyLossPct} onChange={(e) => update({ maxDailyLossPct: +e.target.value })} />
-          </div>
-          <div>
-            <Label className="text-xs">Profit cap (%)</Label>
-            <Input type="number" step="0.1" value={config.profitCapPct} onChange={(e) => update({ profitCapPct: +e.target.value })} />
-          </div>
-          <div>
-            <Label className="text-xs">No entry X min before close</Label>
-            <Input type="number" value={config.noEntryAfterMinutes} onChange={(e) => update({ noEntryAfterMinutes: +e.target.value })} />
-          </div>
+          <ConfigField
+            label="Max trades per day"
+            value={config.maxTradesPerDay}
+            onChange={(v) => update({ maxTradesPerDay: v })}
+          />
+          <ConfigField
+            label="Max daily loss (%)"
+            value={config.maxDailyLossPct}
+            step="0.1"
+            onChange={(v) => update({ maxDailyLossPct: v })}
+          />
+          <ConfigField
+            label="Profit cap (%)"
+            value={config.profitCapPct}
+            step="0.1"
+            onChange={(v) => update({ profitCapPct: v })}
+          />
+          <ConfigField
+            label="No entry X min before close"
+            value={config.noEntryAfterMinutes}
+            onChange={(v) => update({ noEntryAfterMinutes: v })}
+          />
         </CardContent>
       </Card>
 
       <div className="flex gap-2">
-        <Button onClick={save} disabled={saving}>
-          <Save className="mr-2 h-4 w-4" /> {saving ? 'Saving…' : 'Save Configuration'}
+        <Button
+          onClick={save}
+          disabled={saving}
+          className="border-bull/40 bg-bull/20 font-mono text-[11px] tracking-widest text-bull hover:bg-bull/30 hover:text-bull"
+          variant="outline"
+        >
+          <Save className="mr-2 h-4 w-4" /> {saving ? 'SAVING…' : 'SAVE CONFIGURATION'}
         </Button>
-        <Button variant="outline" onClick={reset}>
-          <RotateCcw className="mr-2 h-4 w-4" /> Reset
+        <Button
+          variant="outline"
+          onClick={reset}
+          className="border-border/60 bg-card/40 font-mono text-[11px] tracking-widest text-muted-foreground hover:text-foreground"
+        >
+          <RotateCcw className="mr-2 h-4 w-4" /> RESET
         </Button>
       </div>
+    </div>
+  );
+}
+
+function ConfigField({
+  label,
+  value,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  step?: string;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div>
+      <Label className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+        {label}
+      </Label>
+      <Input
+        type="number"
+        step={step}
+        value={value}
+        onChange={(e) => onChange(+e.target.value)}
+        className="mt-1 border-border/60 bg-muted/30 font-mono text-sm tnum text-foreground focus-visible:border-bull/50 focus-visible:ring-bull/20"
+      />
     </div>
   );
 }

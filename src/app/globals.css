@@ -37,86 +37,285 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  /* Semantic trading colors */
+  --color-bull: var(--bull);
+  --color-bear: var(--bear);
+  --color-warn: var(--warn);
+  --color-ai: var(--ai);
+  --color-info: var(--info);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 }
 
+/* =========================================================================
+   DARK TRADING TERMINAL PALETTE
+   Designed to evoke Bloomberg / Reuters Eikon / Citadel-grade dashboards.
+   - Deep charcoal background with subtle grid
+   - Glassmorphic cards with hairline borders
+   - Emerald (bullish), Rose (bearish), Amber (warn), Violet (AI), Cyan (info)
+   - No indigo / blue accents
+   ========================================================================= */
+
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --radius: 0.5rem;
+
+  /* Core surfaces */
+  --background: #0a0e14;
+  --foreground: #e6edf3;
+
+  --card: #11161e;
+  --card-foreground: #e6edf3;
+
+  --popover: #0f141b;
+  --popover-foreground: #e6edf3;
+
+  --primary: #34d399;
+  --primary-foreground: #052017;
+
+  --secondary: #1c2330;
+  --secondary-foreground: #c9d3e2;
+
+  --muted: #161b24;
+  --muted-foreground: #8b96a8;
+
+  --accent: #1c2330;
+  --accent-foreground: #e6edf3;
+
+  --destructive: #f43f5e;
+
+  --border: #1c2330;
+  --input: #1c2330;
+  --ring: #34d399;
+
+  /* Chart palette: bull, bear, warn, ai, info */
+  --chart-1: #34d399;
+  --chart-2: #fb7185;
+  --chart-3: #fbbf24;
+  --chart-4: #a78bfa;
+  --chart-5: #22d3ee;
+
+  /* Trading-specific semantic tokens */
+  --bull: #34d399;
+  --bear: #fb7185;
+  --warn: #fbbf24;
+  --ai: #a78bfa;
+  --info: #22d3ee;
+
+  --sidebar: #0a0e14;
+  --sidebar-foreground: #e6edf3;
+  --sidebar-primary: #34d399;
+  --sidebar-primary-foreground: #052017;
+  --sidebar-accent: #1c2330;
+  --sidebar-accent-foreground: #e6edf3;
+  --sidebar-border: #1c2330;
+  --sidebar-ring: #34d399;
 }
 
+/* Force the same dark palette whether or not .dark is applied */
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  --radius: 0.5rem;
+  --background: #0a0e14;
+  --foreground: #e6edf3;
+  --card: #11161e;
+  --card-foreground: #e6edf3;
+  --popover: #0f141b;
+  --popover-foreground: #e6edf3;
+  --primary: #34d399;
+  --primary-foreground: #052017;
+  --secondary: #1c2330;
+  --secondary-foreground: #c9d3e2;
+  --muted: #161b24;
+  --muted-foreground: #8b96a8;
+  --accent: #1c2330;
+  --accent-foreground: #e6edf3;
+  --destructive: #f43f5e;
+  --border: #1c2330;
+  --input: #1c2330;
+  --ring: #34d399;
+  --chart-1: #34d399;
+  --chart-2: #fb7185;
+  --chart-3: #fbbf24;
+  --chart-4: #a78bfa;
+  --chart-5: #22d3ee;
+  --bull: #34d399;
+  --bear: #fb7185;
+  --warn: #fbbf24;
+  --ai: #a78bfa;
+  --info: #22d3ee;
+  --sidebar: #0a0e14;
+  --sidebar-foreground: #e6edf3;
+  --sidebar-primary: #34d399;
+  --sidebar-primary-foreground: #052017;
+  --sidebar-accent: #1c2330;
+  --sidebar-accent-foreground: #e6edf3;
+  --sidebar-border: #1c2330;
+  --sidebar-ring: #34d399;
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+
+  html,
   body {
     @apply bg-background text-foreground;
+  }
+
+  /* Bloomberg-style subtle grid pattern + ambient glow at top */
+  body {
+    background-color: #0a0e14;
+    background-image:
+      linear-gradient(to right, rgba(28, 35, 48, 0.55) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(28, 35, 48, 0.55) 1px, transparent 1px),
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(52, 211, 153, 0.05), transparent 60%);
+    background-size: 28px 28px, 28px 28px, 100% 100%;
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Dark, thin scrollbars (terminal-style) */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #1c2330;
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #2a3343;
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* Selection */
+  ::selection {
+    background: rgba(52, 211, 153, 0.25);
+    color: #e6edf3;
+  }
+}
+
+/* =========================================================================
+   TRADING TERMINAL UTILITIES
+   ========================================================================= */
+@layer utilities {
+  /* ---------- Ticker tape ---------- */
+  @keyframes ticker-scroll {
+    0% {
+      transform: translateX(0);
+    }
+    100% {
+      transform: translateX(-50%);
+    }
+  }
+  .animate-ticker {
+    animation: ticker-scroll 80s linear infinite;
+    will-change: transform;
+  }
+  .ticker-track:hover .animate-ticker {
+    animation-play-state: paused;
+  }
+
+  /* ---------- Glow effects (used on live values) ---------- */
+  .glow-bull {
+    box-shadow:
+      0 0 14px -2px rgba(52, 211, 153, 0.55),
+      0 0 4px -1px rgba(52, 211, 153, 0.35);
+  }
+  .glow-bear {
+    box-shadow:
+      0 0 14px -2px rgba(251, 113, 133, 0.55),
+      0 0 4px -1px rgba(251, 113, 133, 0.35);
+  }
+  .glow-warn {
+    box-shadow:
+      0 0 14px -2px rgba(251, 191, 36, 0.55),
+      0 0 4px -1px rgba(251, 191, 36, 0.35);
+  }
+  .glow-ai {
+    box-shadow:
+      0 0 18px -2px rgba(167, 139, 250, 0.5),
+      0 0 4px -1px rgba(167, 139, 250, 0.35);
+  }
+  .glow-danger {
+    box-shadow:
+      0 0 18px -2px rgba(244, 63, 94, 0.5),
+      0 0 4px -1px rgba(244, 63, 94, 0.4);
+  }
+
+  /* Text glow for live, updating numbers */
+  .text-glow-bull {
+    text-shadow: 0 0 8px rgba(52, 211, 153, 0.6);
+  }
+  .text-glow-bear {
+    text-shadow: 0 0 8px rgba(251, 113, 133, 0.6);
+  }
+  .text-glow-warn {
+    text-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
+  }
+  .text-glow-ai {
+    text-shadow: 0 0 8px rgba(167, 139, 250, 0.55);
+  }
+
+  /* ---------- Glassmorphism ---------- */
+  .glass-card {
+    background: rgba(17, 22, 30, 0.65);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+  }
+  .glass-panel {
+    background: rgba(10, 14, 20, 0.75);
+    backdrop-filter: blur(10px) saturate(140%);
+    -webkit-backdrop-filter: blur(10px) saturate(140%);
+  }
+
+  /* ---------- Heatmap color helpers (for sector grid) ---------- */
+  .heat-1 {
+    background-color: rgba(52, 211, 153, 0.18);
+    border-color: rgba(52, 211, 153, 0.35);
+  }
+  .heat-2 {
+    background-color: rgba(52, 211, 153, 0.10);
+    border-color: rgba(52, 211, 153, 0.20);
+  }
+  .heat-3 {
+    background-color: rgba(28, 35, 48, 0.55);
+    border-color: rgba(28, 35, 48, 0.85);
+  }
+  .heat-4 {
+    background-color: rgba(251, 113, 133, 0.10);
+    border-color: rgba(251, 113, 133, 0.22);
+  }
+  .heat-5 {
+    background-color: rgba(251, 113, 133, 0.18);
+    border-color: rgba(251, 113, 133, 0.35);
+  }
+
+  /* Tabular numbers everywhere */
+  .tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum' 1;
+  }
+
+  /* Subtle live pulse */
+  @keyframes live-pulse {
+    0%, 100% {
+      opacity: 1;
+      box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6);
+    }
+    50% {
+      opacity: 0.7;
+      box-shadow: 0 0 0 4px rgba(52, 211, 153, 0);
+    }
+  }
+  .live-dot {
+    animation: live-pulse 2s ease-in-out infinite;
   }
 }

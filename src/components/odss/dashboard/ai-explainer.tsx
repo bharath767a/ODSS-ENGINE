@@ -6,6 +6,7 @@ import { useODSS } from '@/hooks/use-odss';
 import { Sparkles, RefreshCw, Loader2 } from 'lucide-react';
 import { useState } from 'react';
 import type { Recommendation } from '@/lib/odss/types';
+import { cn } from '@/lib/utils';
 
 export function AIExplainer({ rec }: { rec?: Recommendation }) {
   const { topRecommendations } = useODSS();
@@ -34,66 +35,125 @@ export function AIExplainer({ rec }: { rec?: Recommendation }) {
   };
 
   return (
-    <Card>
+    <Card className="border-ai/30 bg-card/50 backdrop-blur-sm">
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center justify-between text-sm">
-          <span className="flex items-center gap-2"><Sparkles className="h-4 w-4 text-violet-500" /> AI Coach</span>
-          {r && <span className="text-xs font-normal text-slate-400">{r.symbol}</span>}
+          <span className="flex items-center gap-2 font-mono tracking-wide text-muted-foreground">
+            <Sparkles className="h-4 w-4 text-ai" />
+            <span className="text-foreground">AI COACH</span>
+          </span>
+          {r && (
+            <span className="font-mono text-[10px] uppercase tracking-widest text-ai">
+              {r.symbol}
+            </span>
+          )}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
-        {!r && <div className="text-xs text-slate-400">No recommendation to explain.</div>}
+        {!r && (
+          <div className="font-mono text-xs text-muted-foreground">
+            No recommendation to explain.
+          </div>
+        )}
         {r && (
           <>
             <div className="flex gap-1.5">
-              <Button size="sm" variant={mode === 'SELECTED' ? 'default' : 'outline'} className="h-7 text-xs" onClick={() => fetchExplanation('SELECTED')} disabled={loading}>
-                Why Selected
+              <Button
+                size="sm"
+                variant={mode === 'SELECTED' ? 'default' : 'outline'}
+                className={cn(
+                  'h-7 font-mono text-[11px] tracking-widest',
+                  mode === 'SELECTED'
+                    ? 'border-ai/50 bg-ai/20 text-ai hover:bg-ai/30 hover:text-ai'
+                    : 'border-border/60 bg-card/40 text-muted-foreground hover:text-foreground'
+                )}
+                onClick={() => fetchExplanation('SELECTED')}
+                disabled={loading}
+              >
+                WHY SELECTED
               </Button>
-              <Button size="sm" variant={mode === 'REJECTED' ? 'default' : 'outline'} className="h-7 text-xs" onClick={() => fetchExplanation('REJECTED')} disabled={loading}>
-                Why Rejected
+              <Button
+                size="sm"
+                variant={mode === 'REJECTED' ? 'default' : 'outline'}
+                className={cn(
+                  'h-7 font-mono text-[11px] tracking-widest',
+                  mode === 'REJECTED'
+                    ? 'border-ai/50 bg-ai/20 text-ai hover:bg-ai/30 hover:text-ai'
+                    : 'border-border/60 bg-card/40 text-muted-foreground hover:text-foreground'
+                )}
+                onClick={() => fetchExplanation('REJECTED')}
+                disabled={loading}
+              >
+                WHY REJECTED
               </Button>
-              {loading && <Loader2 className="h-3 w-3 animate-spin self-center" />}
+              {loading && <Loader2 className="h-3 w-3 animate-spin self-center text-ai" />}
             </div>
 
             {explanation ? (
-              <div className="space-y-2 rounded-lg border border-violet-200 bg-violet-50/30 p-2 text-xs">
-                {explanation.summary && <p className="font-medium text-slate-800">{explanation.summary}</p>}
+              <div className="space-y-2 rounded-lg border border-ai/30 bg-ai/5 p-2 text-xs backdrop-blur-sm">
+                {explanation.summary && (
+                  <p className="font-medium text-foreground">{explanation.summary}</p>
+                )}
                 {explanation.whySelected && explanation.whySelected.length > 0 && (
                   <div>
-                    <div className="text-[10px] font-medium uppercase text-emerald-600">Why Selected</div>
-                    <ul className="ml-3 list-disc space-y-0.5 text-slate-700">
-                      {explanation.whySelected.map((x: string, i: number) => <li key={i}>{x}</li>)}
+                    <div className="font-mono text-[10px] font-bold uppercase tracking-widest text-bull">
+                      ▸ Why Selected
+                    </div>
+                    <ul className="ml-3 list-disc space-y-0.5 text-foreground/80">
+                      {explanation.whySelected.map((x: string, i: number) => (
+                        <li key={i}>{x}</li>
+                      ))}
                     </ul>
                   </div>
                 )}
                 {explanation.whyRejected && explanation.whyRejected.length > 0 && (
                   <div>
-                    <div className="text-[10px] font-medium uppercase text-rose-600">Why Rejected</div>
-                    <ul className="ml-3 list-disc space-y-0.5 text-slate-700">
-                      {explanation.whyRejected.map((x: string, i: number) => <li key={i}>{x}</li>)}
+                    <div className="font-mono text-[10px] font-bold uppercase tracking-widest text-bear">
+                      ▸ Why Rejected
+                    </div>
+                    <ul className="ml-3 list-disc space-y-0.5 text-foreground/80">
+                      {explanation.whyRejected.map((x: string, i: number) => (
+                        <li key={i}>{x}</li>
+                      ))}
                     </ul>
                   </div>
                 )}
                 {explanation.riskNotes && (
                   <div>
-                    <div className="text-[10px] font-medium uppercase text-amber-600">Risk Notes</div>
-                    <p className="text-slate-700">{explanation.riskNotes}</p>
+                    <div className="font-mono text-[10px] font-bold uppercase tracking-widest text-warn">
+                      ▸ Risk Notes
+                    </div>
+                    <p className="text-foreground/80">{explanation.riskNotes}</p>
                   </div>
                 )}
                 {explanation.coachingTip && (
-                  <div className="rounded bg-violet-100 p-1.5">
-                    <span className="text-[10px] font-medium uppercase text-violet-700">Coach Tip</span>
-                    <p className="text-slate-700">{explanation.coachingTip}</p>
+                  <div className="rounded border border-ai/40 bg-ai/15 p-1.5">
+                    <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-ai">
+                      ▸ Coach Tip
+                    </span>
+                    <p className="mt-0.5 text-foreground/80">{explanation.coachingTip}</p>
                   </div>
                 )}
               </div>
             ) : (
-              <div className="rounded-lg border border-dashed bg-slate-50 p-3 text-center text-xs text-slate-400">
-                Click a button above to get an AI explanation of the engine's decision.
+              <div className="rounded-lg border border-dashed border-border/60 bg-muted/20 p-3 text-center font-mono text-[11px] text-muted-foreground">
+                Click a button above to get an AI explanation of the engine&apos;s decision.
               </div>
             )}
             {r.ai && !loading && (
-              <div className="text-[10px] text-slate-400">Last AI update: {new Date(r.ai.timestamp).toLocaleTimeString()}</div>
+              <div className="font-mono text-[10px] text-muted-foreground">
+                Last AI update: {new Date(r.ai.timestamp).toLocaleTimeString('en-IN', { hour12: false })}
+              </div>
+            )}
+            {!loading && (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-6 gap-1 font-mono text-[10px] tracking-widest text-muted-foreground hover:text-ai"
+                onClick={() => fetchExplanation(mode)}
+              >
+                <RefreshCw className="h-3 w-3" /> REFRESH
+              </Button>
             )}
           </>
         )}
