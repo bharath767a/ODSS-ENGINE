@@ -18,6 +18,7 @@ import { JournalTable } from '@/components/odss/journal/journal-table';
 import { AnalyticsDashboard } from '@/components/odss/analytics/analytics-dashboard';
 import { ConfigPanel } from '@/components/odss/config/config-panel';
 import { ReplayValidationPanel } from '@/components/odss/replay/replay-panel';
+import { CredentialsPanel } from '@/components/odss/credentials/credentials-panel';
 import {
   Activity,
   LayoutDashboard,
@@ -31,6 +32,7 @@ import {
   FlaskConical,
   Circle,
   Cpu,
+  KeyRound,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Recommendation } from '@/lib/odss/types';
@@ -152,12 +154,13 @@ export default function ODSSPage() {
       {/* ============================= MAIN ============================= */}
       <main className="mx-auto w-full max-w-[1800px] flex-1 px-4 py-3">
         <Tabs defaultValue="dashboard">
-          <TabsList className="mb-3 grid h-9 w-full grid-cols-2 border border-border/60 bg-card/40 backdrop-blur sm:grid-cols-6">
+          <TabsList className="mb-3 grid h-9 w-full grid-cols-2 border border-border/60 bg-card/40 backdrop-blur sm:grid-cols-7">
             <TerminalTabsTrigger value="dashboard" icon={<LayoutDashboard className="h-3.5 w-3.5" />} label="Dashboard" />
             <TerminalTabsTrigger value="opportunities" icon={<Trophy className="h-3.5 w-3.5" />} label="Opportunities" />
             <TerminalTabsTrigger value="journal" icon={<BookOpen className="h-3.5 w-3.5" />} label="Journal" />
             <TerminalTabsTrigger value="analytics" icon={<BarChart3 className="h-3.5 w-3.5" />} label="Analytics" />
             <TerminalTabsTrigger value="validation" icon={<FlaskConical className="h-3.5 w-3.5" />} label="Validation" />
+            <TerminalTabsTrigger value="credentials" icon={<KeyRound className="h-3.5 w-3.5" />} label="Data Sources" />
             <TerminalTabsTrigger value="config" icon={<Settings className="h-3.5 w-3.5" />} label="Config" />
           </TabsList>
 
@@ -220,6 +223,13 @@ export default function ODSSPage() {
               <div>
                 <DecisionLog />
               </div>
+            </div>
+          </TabsContent>
+
+          {/* DATA SOURCES / CREDENTIALS TAB */}
+          <TabsContent value="credentials" className="space-y-3">
+            <div className="mx-auto max-w-2xl">
+              <CredentialsPanel />
             </div>
           </TabsContent>
 
