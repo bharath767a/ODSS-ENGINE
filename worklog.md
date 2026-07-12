@@ -122,3 +122,67 @@ Stage Summary:
 - Milestone 2 complete: replay recording + validation report generator
 - System can now answer: "Which engines actually contribute to winning trades?"
 - Next: connect real broker data for historical validation (Milestone 2 Phase B)
+
+---
+Task ID: AUTH
+Agent: main
+Task: Complete login system (NextAuth credentials + Prisma User model + login overlay)
+
+Work Log:
+- Added User model to prisma/schema.prisma (id, username, password, name, role, timestamps)
+- Installed bcryptjs@3.0.3 + @types/bcryptjs@3.0.0
+- Ran `bun run db:push` — User table created in SQLite
+- Created src/lib/user-manager.ts:
+  - createUser() — bcrypt-hashed, MAX_USERS=4 cap, role validation
+  - validateUser() — bcrypt.compare against DB
+  - getUserCount(), getUsers() (no password hashes), deleteUser()
+  - seedDefaultUsers() — creates admin/admin123 (role: admin) on empty table
+  - ensureSeedUsers() — idempotent singleton wrapper for app init paths
+- Created src/lib/auth.ts (NextAuth config):
+  - CredentialsProvider backed by validateUser()
+  - JWT session strategy (7-day maxAge)
+  - authorize() calls ensureSeedUsers() first (seeds admin on first login)
+  - Session/JWT callbacks propagate id, username, role
+  - TypeScript module augmentation for Session.user fields
+- Created src/app/api/auth/[...nextauth]/route.ts (standard NextAuth handler)
+- Created src/app/api/odss/users/route.ts:
+  - GET — list users (auth required, returns count/max/canAdd)
+  - POST — create user (admin only, enforces MAX_USERS)
+  - DELETE — delete user by ?id= (admin only, can't delete self)
+- Created src/components/odss/auth/session-provider.tsx (client SessionProvider wrapper)
+- Created src/components/odss/auth/login-screen.tsx:
+  - Full-screen dark overlay, glassmorphism card, gradient ODSS wordmark
+  - Username + password fields with show/hide toggle, autofill hints
+  - signIn('credentials', { redirect: false }) + window.location.reload() on success
+  - Default credentials hint (admin / admin123) in info callout
+  - Subtle animated scan line + shimmer on logo
+  - Error display with bear/red styling
+  - Loading state with spinner
+- Updated src/app/layout.tsx — wraps children with SessionProviderWrapper
+- Updated src/app/page.tsx:
+  - Split into ODSSPage (auth gate) + ODSSDashboard (existing UI)
+  - status === 'loading' → spinner screen
+  - status === 'unauthenticated' → <LoginScreen />
+  - status === 'authenticated' → <ODSSDashboard /> (useODSS only mounts now)
+  - Header gets user chip (username · role with colored dot) + EXIT button (signOut)
+- Wired ensureSeedUsers() into mini-services/odss-market/index.ts startup
+
+Verification:
+- bun run lint: 0 errors, 1 pre-existing warning (nse-proxy, unrelated)
+- bun run db:push: succeeded, User table created
+- End-to-end API test via curl:
+  - GET /api/auth/csrf → 200 with csrfToken
+  - POST /api/auth/callback/credentials (admin/admin123) → 200, server logs
+    "[user-manager] Seeded default admin user (admin / admin123)"
+  - GET /api/auth/session → {"user":{"name":"ODSS Administrator","id":"...","username":"admin","role":"admin"}}
+  - GET /api/odss/users → {"users":[...],"count":1,"max":4,"canAdd":true}
+  - POST /api/auth/signout → 200, session cleared
+- Default credentials: admin / admin123 (role: admin)
+
+Stage Summary:
+- Complete auth layer wraps the ODSS dashboard
+- Login is an overlay on / (no separate page routes — single-route constraint honored)
+- bcrypt-hashed passwords, JWT sessions (no DB session store)
+- Max 4 users enforced at registration time
+- Default admin seeded automatically on first login attempt or mini-service startup
+- Logout button in header (top-right), user chip shows username + role

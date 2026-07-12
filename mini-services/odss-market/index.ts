@@ -19,6 +19,7 @@ import { getConfig } from '../../src/lib/odss/config';
 import { startRecording, stopRecording, recordTick, recordScan, isRecording, listSessions, getCurrentSessionId } from '../../src/lib/odss/replay/recorder';
 import { generateValidationReport } from '../../src/lib/odss/replay/validator';
 import { checkGuardrails, registerTradeEntry, registerTradeExit, getGuardrailStatus } from '../../src/lib/odss/engines/guardrails-engine';
+import { ensureSeedUsers } from '../../src/lib/user-manager';
 import type { Direction } from '../../src/lib/odss/types';
 
 const PORT = 3002;
@@ -50,6 +51,11 @@ loadActiveTradeFromDb().then(() => {
   console.log('[odss-market] Active trade loaded');
 }).catch((e) => {
   console.warn('[odss-market] Failed to load active trade:', e.message);
+});
+
+// Seed default admin user (admin / admin123) on first run.
+ensureSeedUsers().catch((e) => {
+  console.warn('[odss-market] Failed to seed default users:', e.message);
 });
 
 // Pre-warm the simulator with some ticks so engines have data

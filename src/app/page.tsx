@@ -1,9 +1,11 @@
 'use client';
 
 import { useState } from 'react';
+import { useSession, signOut } from 'next-auth/react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
 import { useODSS } from '@/hooks/use-odss';
+import { LoginScreen } from '@/components/odss/auth/login-screen';
 import { MarketOverview } from '@/components/odss/dashboard/market-overview';
 import { SectorGrid } from '@/components/odss/dashboard/sector-grid';
 import { OpportunityTable } from '@/components/odss/dashboard/opportunity-table';
@@ -19,6 +21,8 @@ import { AnalyticsDashboard } from '@/components/odss/analytics/analytics-dashbo
 import { ConfigPanel } from '@/components/odss/config/config-panel';
 import { ReplayValidationPanel } from '@/components/odss/replay/replay-panel';
 import { CredentialsPanel } from '@/components/odss/credentials/credentials-panel';
+import { StockAnalysisTab } from '@/components/odss/fundamentals/stock-analysis-tab';
+import { MutualFundsTab } from '@/components/odss/mutual-funds/mutual-funds-tab';
 import {
   Activity,
   LayoutDashboard,
@@ -33,11 +37,47 @@ import {
   Circle,
   Cpu,
   KeyRound,
+  LogOut,
+  Loader2,
+  Building2,
+  TrendingUp,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Recommendation } from '@/lib/odss/types';
 
 export default function ODSSPage() {
+  const { data: session, status } = useSession();
+
+  // ---------- Auth gate ----------
+  // The dashboard component (which calls useODSS / opens the market-data
+  // socket) is only mounted once we know the user is authenticated. This
+  // keeps the login screen lightweight and avoids a dangling socket.
+  if (status === 'loading') {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="flex flex-col items-center gap-3 text-muted-foreground">
+          <Loader2 className="h-8 w-8 animate-spin text-bull" />
+          <span className="font-mono text-[11px] tracking-widest">
+            AUTHENTICATING SESSION…
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === 'unauthenticated' || !session?.user) {
+    return <LoginScreen />;
+  }
+
+  return <ODSSDashboard />;
+}
+
+/**
+ * Inner dashboard component. Only mounted when authenticated, so the
+ * socket.io / useODSS lifecycle is cleanly tied to a live session.
+ */
+function ODSSDashboard() {
+  const { data: session } = useSession();
   const {
     connected,
     lastUpdate,
@@ -49,6 +89,18 @@ export default function ODSSPage() {
   } = useODSS();
   const [selectedRec, setSelectedRec] = useState<Recommendation | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // Defensive: should never render without a session (parent gates on auth),
+  // but keep TypeScript happy and avoid runtime crashes if state flips.
+  if (!session?.user) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  const user = session.user;
 
   const handleSelect = (rec: Recommendation) => {
     setSelectedRec(rec);
@@ -141,6 +193,29 @@ export default function ODSSPage() {
             >
               <Zap className="mr-1 h-3 w-3" /> RESET
             </Button>
+
+            {/* Logged-in user chip + logout */}
+            <div className="mx-1 hidden h-6 w-px bg-border/60 sm:block" />
+            <div className="hidden items-center gap-1.5 rounded border border-border/60 bg-card/40 px-2 py-1 font-mono text-[10px] tracking-wider text-muted-foreground sm:flex">
+              <span
+                className={cn(
+                  'inline-block h-1.5 w-1.5 rounded-full',
+                  user.role === 'admin' ? 'bg-ai' : 'bg-bull',
+                )}
+              />
+              <span className="text-foreground/80">{user.username}</span>
+              <span className="text-border">·</span>
+              <span className="uppercase">{user.role}</span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => signOut({ callbackUrl: '/' })}
+              title="Sign out"
+              className="h-8 border-bear/40 bg-bear/5 font-mono text-[11px] text-bear/80 hover:bg-bear/15 hover:text-bear"
+            >
+              <LogOut className="mr-1 h-3 w-3" /> EXIT
+            </Button>
           </div>
         </div>
       </header>
@@ -154,9 +229,11 @@ export default function ODSSPage() {
       {/* ============================= MAIN ============================= */}
       <main className="mx-auto w-full max-w-[1800px] flex-1 px-4 py-3">
         <Tabs defaultValue="dashboard">
-          <TabsList className="mb-3 grid h-9 w-full grid-cols-2 border border-border/60 bg-card/40 backdrop-blur sm:grid-cols-7">
+          <TabsList className="mb-3 grid h-9 w-full grid-cols-2 border border-border/60 bg-card/40 backdrop-blur sm:grid-cols-9">
             <TerminalTabsTrigger value="dashboard" icon={<LayoutDashboard className="h-3.5 w-3.5" />} label="Dashboard" />
             <TerminalTabsTrigger value="opportunities" icon={<Trophy className="h-3.5 w-3.5" />} label="Opportunities" />
+            <TerminalTabsTrigger value="stocks" icon={<Building2 className="h-3.5 w-3.5" />} label="Stock Analysis" />
+            <TerminalTabsTrigger value="funds" icon={<TrendingUp className="h-3.5 w-3.5" />} label="Mutual Funds" />
             <TerminalTabsTrigger value="journal" icon={<BookOpen className="h-3.5 w-3.5" />} label="Journal" />
             <TerminalTabsTrigger value="analytics" icon={<BarChart3 className="h-3.5 w-3.5" />} label="Analytics" />
             <TerminalTabsTrigger value="validation" icon={<FlaskConical className="h-3.5 w-3.5" />} label="Validation" />
@@ -202,6 +279,16 @@ export default function ODSSPage() {
                 <EngineVotesPanel rec={selectedRec ?? topRecommendations[0]} />
               </div>
             </div>
+          </TabsContent>
+
+          {/* STOCK ANALYSIS TAB */}
+          <TabsContent value="stocks" className="space-y-3">
+            <StockAnalysisTab />
+          </TabsContent>
+
+          {/* MUTUAL FUNDS TAB */}
+          <TabsContent value="funds" className="space-y-3">
+            <MutualFundsTab />
           </TabsContent>
 
           {/* JOURNAL TAB */}
