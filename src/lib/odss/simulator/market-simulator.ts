@@ -256,6 +256,63 @@ export function getIndiaVix(): number {
   return getSimulator().indiaVix;
 }
 
+/**
+ * Inject a REAL quote into the simulator, overwriting the synthetic price.
+ *
+ * This is the key function that makes the engine run on REAL data:
+ * the mini-service's tick loop calls this after fetching real quotes
+ * from NSE/Yahoo. The simulator's candle history is preserved (for
+ * technical indicators), but the current price, OHLC, volume, and
+ * changePct are overwritten with real values.
+ *
+ * If `realVix` is provided, it also overwrites the simulator's VIX.
+ */
+export function injectRealQuote(
+  symbol: string,
+  realQuote: { ltp: number; prevClose: number; open: number; high: number; low: number; volume: number; changePct: number; vwap?: number },
+  realVix?: number,
+): void {
+  const s = getSimulator();
+  const sym = s.symbols.get(symbol);
+  if (!sym) return;
+
+  // Overwrite the current price with the real price
+  sym.price = realQuote.ltp;
+  sym.prevClose = realQuote.prevClose;
+  sym.open = realQuote.open;
+  sym.dayHigh = realQuote.high;
+  sym.dayLow = realQuote.low;
+  sym.cumulativeVol = realQuote.volume;
+
+  // Add a candle with the real price so technical indicators work
+  // (but mark it with the real timestamp so it doesn't conflict with
+  // the simulator's synthetic candle history)
+  sym.candles.push({
+    timestamp: Date.now(),
+    open: realQuote.open,
+    high: realQuote.high,
+    low: realQuote.low,
+    close: realQuote.ltp,
+    volume: realQuote.volume,
+  });
+  if (sym.candles.length > 300) sym.candles.shift();
+
+  // Overwrite VIX if provided
+  if (realVix !== undefined && realVix > 0 && realVix < 200) {
+    s.indiaVix = realVix;
+  }
+}
+
+/**
+ * Inject real India VIX into the simulator.
+ */
+export function injectRealVix(realVix: number): void {
+  const s = getSimulator();
+  if (realVix > 0 && realVix < 200) {
+    s.indiaVix = realVix;
+  }
+}
+
 export function getRegime(): Regime {
   return getSimulator().regime;
 }

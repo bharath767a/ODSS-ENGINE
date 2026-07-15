@@ -186,3 +186,78 @@ Stage Summary:
 - Max 4 users enforced at registration time
 - Default admin seeded automatically on first login attempt or mini-service startup
 - Logout button in header (top-right), user chip shows username + role
+
+---
+Task ID: REAL-DATA-FIX
+Agent: main
+Task: Fix Stock Analysis price sync + wire real Yahoo Finance data into all API routes
+
+Work Log:
+- Investigated user complaints: (1) Swing tab crash, (2) Stock Analysis price not sync, (3) real option data status
+- Discovered ALL previous session work (macro engine, swing tab, option chain sources panel, Yahoo provider) was REVERTED by an automated git process — files don't exist, worklog was rolled back to 188 lines
+- Diagnosed root cause of price sync issue: ALL API routes (quote, optionchain, fundamentals) imported getQuote/getOptionChain from simulator/market-simulator.ts (SYNTHETIC data), NOT from the real data provider router
+- The NSE provider existed but was NEVER called by any API route — callCount=0
+- No Yahoo provider existed (was reverted) — only NSE, AngelOne in the router
+- NSE_PROXY_URL not set in .env — NSE direct geo-blocked from non-Indian server
+
+Fixes implemented:
+1. Created Yahoo Finance provider (src/lib/odss/data-providers/yahoo-provider.ts):
+   - Fetches REAL quotes for all NSE stocks + indices (^NSEI, ^NSEBANK, ^CNXFIN, RELIANCE.NS, etc.)
+   - Fetches REAL India VIX from ^INDIAVIX
+   - Fetches historical daily candles (1mo/3mo/1y/10y)
+   - 4s cache for quotes, 5s for VIX, 5min for history
+   - Rate-limit handling with retry + exponential backoff
+   - Does NOT provide option chains (Yahoo has no Indian option OI data)
+
+2. Wired Yahoo into the data provider router:
+   - Added 'YAHOO' to ProviderName type
+   - Registered YahooProvider in router constructor
+   - Priority order: NSE > YAHOO > ANGEL_ONE > UPSTOX > SIMULATOR
+   - Configured rate limiter: 100 req/min for Yahoo
+
+3. Updated API routes to use real data:
+   - /api/odss/quote/[symbol]: tries router.getQuote() first (Yahoo→NSE), falls back to simulator, includes `source` field
+   - /api/odss/optionchain/[symbol]: tries router.getOptionChain() first (NSE), falls back to simulator, includes `source` field
+   - /api/odss/fundamentals/[symbol]: fetches real price via router.getQuote(), includes `priceSource` and `priceChangePct` fields
+
+4. Added injectRealQuote() + injectRealVix() functions to simulator:
+   - Allows the mini-service to overwrite synthetic prices with real ones
+   - Preserves candle history for technical indicators
+   - Updates price, OHLC, volume, changePct, VIX
+
+5. Added real data injection loop to mini-service:
+   - Fetches VIX + indices + 10 stocks (rotating) every 10 seconds from Yahoo
+   - Injects real prices into the simulator's in-memory store
+   - Broadcasts realData stats via WebSocket (source, lastSuccess, fetched count)
+
+6. Updated Stock Analysis tab to show live prices:
+   - Added livePrices state that fetches real quotes for all stocks in the list
+   - Stock list buttons now show REAL Yahoo prices (green/red color-coded by changePct)
+   - Falls back to static basePrice if fetch fails
+   - Refreshes every 30 seconds
+
+Verification:
+- NIFTY quote: 24052.05 (source: YAHOO) — real price ✅
+- RELIANCE quote: 1293 (source: YAHOO) — real price ✅
+- RELIANCE fundamentals: currentPrice=1293, priceSource=YAHOO ✅
+- Stock list: all 15+ stocks show real Yahoo prices (HDFCBANK ₹809, TCS ₹2201, INFY ₹1093, etc.) ✅
+- India VIX: 13.75 (real, from ^INDIAVIX) ✅
+- Option chain: still SIMULATOR (NSE geo-blocked without proxy) ⚠️
+- Lint: 0 errors, 1 pre-existing warning (nse-proxy, unrelated)
+
+Swing tab explanation:
+- The Swing tab does NOT exist in the current codebase. It was part of my previous session's work that was reverted by an automated git process.
+- The user's browser is caching the old version with the Swing tab.
+- Fix: hard-refresh the browser (Ctrl+Shift+R or Cmd+Shift+R) to clear the cache.
+
+Real option data status:
+- Real QUOTES: YES ✅ (Yahoo Finance — NIFTY, BANKNIFTY, FINNIFTY, all F&O stocks)
+- Real VIX: YES ✅ (Yahoo ^INDIAVIX = 13.75)
+- Real OPTION CHAINS: NO ⚠️ — Yahoo doesn't provide Indian option chains. NSE direct is the only free source but is geo-blocked without a Mumbai proxy. To enable real option chains, set NSE_PROXY_URL in .env to a Cloudflare Worker deployed in Mumbai region (code scaffolded at /home/z/my-project/nse-proxy/cloudflare-worker/nse-proxy.js).
+
+Stage Summary:
+- Stock Analysis price sync issue FIXED — all prices now come from Yahoo Finance (real market data)
+- The entire app now runs on REAL quotes + REAL VIX from Yahoo Finance
+- Option chains remain simulated until NSE_PROXY_URL is configured
+- The Swing tab crash is a browser cache issue — user needs to hard-refresh
+- The recurring revert issue: automated git processes are reverting uncommitted work. Future sessions should commit changes immediately.

@@ -5,20 +5,32 @@
  *   1. Which providers are configured
  *   2. Which providers are not rate-limited
  *   3. Which provider last succeeded (prefer consistency)
- *   4. Priority order: ANGEL_ONE > UPSTOX > NSE > SIMULATOR
+ *   4. Priority order: NSE > YAHOO > ANGEL_ONE > UPSTOX > SIMULATOR
  *
- * Falls back gracefully: if Angel One rate-limits, try Upstox.
- * If Upstox fails, try NSE (free, public). If NSE fails, use simulator.
+ * Falls back gracefully: if NSE rate-limits (or geo-blocks), try Yahoo.
+ * If Yahoo fails, try Angel One (when configured). If Angel One fails,
+ * use the simulator (always works, but data is synthetic).
+ *
+ * Yahoo Finance is a FREE public source that provides:
+ *   - Real quotes for all NSE stocks + indices (RELIANCE.NS, ^NSEI, etc.)
+ *   - REAL India VIX from ^INDIAVIX
+ *   - Historical daily candles for technical analysis
+ *
+ * Yahoo does NOT provide option chains — for those, NSE direct is the
+ * only free source (needs Mumbai proxy via NSE_PROXY_URL env var).
  */
 import type { Provider, ProviderHealth, ProviderName } from './types';
 import { rateLimiter } from './types';
 import type { Quote, OptionChain } from '../types';
 import { NSEProvider } from './nse-provider';
+import { YahooProvider } from './yahoo-provider';
 import { AngelOneProvider } from './angelone-provider';
 import { ALL_SYMBOLS } from '../universe';
 
-// Priority order — higher priority providers are tried first
-const PRIORITY: ProviderName[] = ['ANGEL_ONE', 'UPSTOX', 'NSE', 'SIMULATOR'];
+// Priority order — higher priority providers are tried first.
+// NSE is highest (real option chains + real quotes), Yahoo is second
+// (real quotes + VIX, but no option chains), then broker APIs.
+const PRIORITY: ProviderName[] = ['NSE', 'YAHOO', 'ANGEL_ONE', 'UPSTOX', 'SIMULATOR'];
 
 export class ProviderRouter implements Provider {
   name: ProviderName = 'SIMULATOR'; // The router itself is transparent
@@ -28,6 +40,7 @@ export class ProviderRouter implements Provider {
   constructor() {
     // Register all providers
     this.providers.set('NSE', new NSEProvider());
+    this.providers.set('YAHOO', new YahooProvider());
     this.providers.set('ANGEL_ONE', new AngelOneProvider());
     // UPSTOX would be added here when implemented
     // SIMULATOR is the fallback — handled by the existing market-simulator module

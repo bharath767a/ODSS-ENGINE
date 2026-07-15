@@ -26,12 +26,52 @@ export function StockAnalysisTab() {
   const [loading, setLoading] = useState(false);
   const [story, setStory] = useState<any>(null);
   const [storyLoading, setStoryLoading] = useState(false);
+  const [livePrices, setLivePrices] = useState<Record<string, { price: number; changePct: number; source: string }>>({});
   const { toast } = useToast();
 
   const stocks = ALL_SYMBOLS.filter((s) => s.type === 'STOCK');
   const filtered = stocks.filter((s) =>
     !search || s.symbol.toLowerCase().includes(search.toLowerCase()) || s.name.toLowerCase().includes(search.toLowerCase())
   );
+
+  // Fetch live prices for all stocks in the list (from Yahoo via the quote API)
+  useEffect(() => {
+    let mounted = true;
+    async function fetchLivePrices() {
+      const prices: Record<string, { price: number; changePct: number; source: string }> = {};
+      // Fetch in batches of 5 to avoid overwhelming the API
+      const batchSize = 5;
+      for (let i = 0; i < filtered.length; i += batchSize) {
+        const batch = filtered.slice(i, i + batchSize);
+        await Promise.allSettled(
+          batch.map(async (s) => {
+            try {
+              const res = await fetch(`/api/odss/quote/${s.symbol}`);
+              if (res.ok) {
+                const q = await res.json();
+                if (q.ltp > 0) {
+                  prices[s.symbol] = {
+                    price: q.ltp,
+                    changePct: q.changePct ?? 0,
+                    source: q.source ?? 'UNKNOWN',
+                  };
+                }
+              }
+            } catch {
+              // individual quote failed — skip
+            }
+          }),
+        );
+      }
+      if (mounted) setLivePrices(prices);
+    }
+    fetchLivePrices();
+    const id = setInterval(fetchLivePrices, 30000); // refresh every 30s
+    return () => {
+      mounted = false;
+      clearInterval(id);
+    };
+  }, [search]); // re-fetch when search changes (filtered list changes)
 
   useEffect(() => {
     if (!selectedSymbol) {
@@ -107,7 +147,16 @@ export function StockAnalysisTab() {
                 <div className="truncate text-[10px] text-muted-foreground">{s.name}</div>
                 <div className="mt-1 flex items-center justify-between">
                   <Badge variant="outline" className="text-[9px]">{s.sector}</Badge>
-                  <span className="font-mono text-[10px] text-bull">₹{s.basePrice.toFixed(0)}</span>
+                  {livePrices[s.symbol] ? (
+                    <span className={cn(
+                      'font-mono text-[10px]',
+                      livePrices[s.symbol].changePct >= 0 ? 'text-bull' : 'text-bear',
+                    )}>
+                      ₹{livePrices[s.symbol].price.toFixed(0)}
+                    </span>
+                  ) : (
+                    <span className="font-mono text-[10px] text-muted-foreground">₹{s.basePrice.toFixed(0)}</span>
+                  )}
                 </div>
               </button>
             ))}

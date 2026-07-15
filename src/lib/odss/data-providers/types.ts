@@ -6,7 +6,7 @@
  * Quote/OptionChain interfaces, so swapping providers doesn't touch them.
  */
 
-export type ProviderName = 'NSE' | 'ANGEL_ONE' | 'UPSTOX' | 'SIMULATOR';
+export type ProviderName = 'NSE' | 'YAHOO' | 'ANGEL_ONE' | 'UPSTOX' | 'SIMULATOR';
 export type ProviderStatus = 'ACTIVE' | 'RATE_LIMITED' | 'ERROR' | 'NOT_CONFIGURED' | 'DISABLED';
 
 export interface ProviderHealth {
@@ -87,6 +87,7 @@ export const rateLimiter = new RateLimitManager();
 
 // Configure rate limits per provider
 rateLimiter.configure('NSE', 20, 60000);        // 20 req/min (NSE blocks aggressive callers)
+rateLimiter.configure('YAHOO', 100, 60000);     // 100 req/min (Yahoo is generous but rate-limits on abuse)
 rateLimiter.configure('ANGEL_ONE', 180, 60000); // 3 req/sec
 rateLimiter.configure('UPSTOX', 300, 60000);    // 5 req/sec
 rateLimiter.configure('SIMULATOR', Infinity, 0); // unlimited

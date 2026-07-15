@@ -12,7 +12,7 @@
  */
 import { createServer } from 'http';
 import { Server } from 'socket.io';
-import { tick, getQuote, getAllQuotes, getIndiaVix, getMarketBreadth, getOptionChain, resetSimulator } from '../../src/lib/odss/simulator/market-simulator';
+import { tick, getQuote, getAllQuotes, getIndiaVix, getMarketBreadth, getOptionChain, resetSimulator, injectRealQuote, injectRealVix } from '../../src/lib/odss/simulator/market-simulator';
 import { runScan, enterTrade, exitTrade } from '../../src/lib/odss/orchestrator';
 import { getStore, loadActiveTradeFromDb } from '../../src/lib/odss/store/store';
 import { getConfig } from '../../src/lib/odss/config';
@@ -20,6 +20,8 @@ import { startRecording, stopRecording, recordTick, recordScan, isRecording, lis
 import { generateValidationReport } from '../../src/lib/odss/replay/validator';
 import { checkGuardrails, registerTradeEntry, registerTradeExit, getGuardrailStatus } from '../../src/lib/odss/engines/guardrails-engine';
 import { ensureSeedUsers } from '../../src/lib/user-manager';
+import { getDataRouter } from '../../src/lib/odss/data-providers/router';
+import { ALL_SYMBOLS } from '../../src/lib/odss/universe';
 import type { Direction } from '../../src/lib/odss/types';
 
 const PORT = 3002;
@@ -62,6 +64,136 @@ ensureSeedUsers().catch((e) => {
 for (let i = 0; i < 30; i++) tick();
 console.log('[odss-market] Simulator pre-warmed with 30 ticks');
 
+// ============================================================
+// REAL DATA INJECTION LOOP
+// ============================================================
+// Every 10 seconds, fetch REAL quotes from Yahoo Finance (free,
+// public, no key) and inject them into the simulator's in-memory
+// store. This overwrites the synthetic prices with REAL market
+// prices, so all API routes that call getQuote() return real data.
+//
+// Yahoo is the PRIMARY real data source because:
+//   - It works from any IP (no geo-block, unlike NSE)
+//   - It returns real quotes for all NSE stocks + indices
+//   - It returns real India VIX from ^INDIAVIX
+//   - It's completely free with no auth
+//
+// For option chains, Yahoo doesn't provide them — those remain
+// simulated unless NSE_PROXY_URL is configured (Mumbai Cloudflare
+// Worker). The optionchain API route tries NSE first, then falls
+// back to the simulator.
+//
+// Key symbols fetched: NIFTY, BANKNIFTY, FINNIFTY (indices) +
+// all F&O stocks. India VIX is fetched separately.
+const REAL_DATA_INTERVAL_MS = 10_000; // 10 seconds
+const REAL_DATA_SYMBOLS = ALL_SYMBOLS.map((s) => s.symbol);
+let realDataEnabled = true;
+let lastRealDataFetch = 0;
+let realDataStats = { fetched: 0, failed: 0, lastSuccess: 0 as number | null, source: 'NONE' as string };
+
+async function fetchAndInjectRealData() {
+  if (!realDataEnabled) return;
+  console.log('[odss-market] fetchAndInjectRealData: starting...');
+  try {
+    const router = getDataRouter();
+    const yahooProvider = router.getProvider('YAHOO');
+    if (!yahooProvider) {
+      console.warn('[odss-market] Yahoo provider not available in router');
+      return;
+    }
+    console.log('[odss-market] Yahoo provider found, fetching VIX...');
+
+    // Fetch India VIX first (most important)
+    try {
+      const vix = await yahooProvider.getIndiaVIX();
+      console.log('[odss-market] Yahoo VIX result:', vix);
+      if (vix > 0 && vix < 200) {
+        injectRealVix(vix);
+        realDataStats.source = 'YAHOO';
+      }
+    } catch (e) {
+      console.warn('[odss-market] VIX fetch failed:', (e as Error).message);
+    }
+
+    // Fetch quotes for all symbols in batches (Yahoo rate-limits)
+    // Prioritize indices first, then stocks
+    const indices = REAL_DATA_SYMBOLS.filter((s) => {
+      const meta = ALL_SYMBOLS.find((a) => a.symbol === s);
+      return meta?.type === 'INDEX';
+    });
+    const stocks = REAL_DATA_SYMBOLS.filter((s) => {
+      const meta = ALL_SYMBOLS.find((a) => a.symbol === s);
+      return meta?.type === 'STOCK';
+    });
+
+    // Fetch indices (small list, fetch all at once)
+    let fetched = 0;
+    for (const sym of indices) {
+      try {
+        const q = await yahooProvider.getQuote(sym);
+        if (q && q.ltp > 0) {
+          injectRealQuote(sym, {
+            ltp: q.ltp,
+            prevClose: q.prevClose,
+            open: q.open,
+            high: q.high,
+            low: q.low,
+            volume: q.volume,
+            changePct: q.changePct,
+            vwap: q.vwap,
+          });
+          fetched++;
+          console.log(`[odss-market] Injected ${sym}: ${q.ltp} (change ${q.changePct.toFixed(2)}%)`);
+        }
+      } catch {
+        // individual quote failed — continue
+      }
+    }
+
+    // Fetch stocks in smaller batches to respect rate limits
+    const stockBatch = stocks.slice(0, 10); // fetch 10 stocks per cycle (rotates)
+    const offset = Math.floor(Date.now() / REAL_DATA_INTERVAL_MS) % Math.ceil(stocks.length / 10);
+    const startIdx = offset * 10;
+    const stockSlice = stocks.slice(startIdx, startIdx + 10);
+    for (const sym of stockSlice) {
+      try {
+        const q = await yahooProvider.getQuote(sym);
+        if (q && q.ltp > 0) {
+          injectRealQuote(sym, {
+            ltp: q.ltp,
+            prevClose: q.prevClose,
+            open: q.open,
+            high: q.high,
+            low: q.low,
+            volume: q.volume,
+            changePct: q.changePct,
+            vwap: q.vwap,
+          });
+          fetched++;
+        }
+      } catch {
+        // individual quote failed — continue
+      }
+    }
+
+    realDataStats.fetched = fetched;
+    realDataStats.lastSuccess = Date.now();
+    if (fetched > 0) {
+      realDataStats.source = 'YAHOO';
+    }
+    lastRealDataFetch = Date.now();
+  } catch (e) {
+    realDataStats.failed++;
+    console.warn('[odss-market] Real data fetch error:', (e as Error).message);
+  }
+}
+
+// Start the real data injection loop
+setInterval(fetchAndInjectRealData, REAL_DATA_INTERVAL_MS);
+// Fetch immediately on startup (after a 2s delay to let the simulator warm up)
+setTimeout(fetchAndInjectRealData, 2000);
+console.log('[odss-market] Real data injection loop started (Yahoo Finance, 10s interval)');
+
 let ticking = true;
 let scanning = true;
 
@@ -100,6 +232,12 @@ setInterval(async () => {
       })),
       guardrails,
       recording: isRecording(),
+      realData: {
+        source: realDataStats.source,
+        lastSuccess: realDataStats.lastSuccess,
+        fetched: realDataStats.fetched,
+        ageMs: realDataStats.lastSuccess ? Date.now() - realDataStats.lastSuccess : null,
+      },
     });
   } catch (e) {
     console.error('[odss-market] Tick error:', e.message);
@@ -294,6 +432,32 @@ io.on('connection', (socket) => {
       if (ack) ack(status);
     } catch (e: any) {
       if (ack) ack({ error: e.message });
+    }
+  });
+
+  // Toggle real data injection on/off
+  socket.on('realdata:toggle', (enabled: boolean, ack?: (res: any) => void) => {
+    realDataEnabled = enabled;
+    console.log(`[odss-market] Real data injection ${enabled ? 'ENABLED' : 'DISABLED'}`);
+    if (ack) ack({ enabled: realDataEnabled });
+  });
+
+  // Get real data stats
+  socket.on('realdata:status', (_payload: any, ack?: (res: any) => void) => {
+    if (ack) ack({
+      enabled: realDataEnabled,
+      ...realDataStats,
+      lastFetchAgo: lastRealDataFetch ? Date.now() - lastRealDataFetch : null,
+    });
+  });
+
+  // Force immediate real data refresh
+  socket.on('realdata:refresh', async (_payload: any, ack?: (res: any) => void) => {
+    try {
+      await fetchAndInjectRealData();
+      if (ack) ack({ ok: true, ...realDataStats });
+    } catch (e: any) {
+      if (ack) ack({ ok: false, error: e.message });
     }
   });
 
