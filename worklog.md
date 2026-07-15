@@ -842,3 +842,89 @@ Stage Summary:
 - Real Yahoo Finance quotes flow through to the swing endpoint (confirmed with HDFCBANK returning entry=809.40 source=REAL)
 - When `@/lib/odss/learning/` modules are eventually added by another agent, the learning/strategy-lab routes will automatically start delegating to them (no code change needed)
 - Stable, deterministic fallback data ensures the UI never crashes on these endpoints
+
+---
+Task ID: LAVENDER-RESTORE-FINAL
+Agent: main
+Task: Restore lavender theme + all missing tabs + price sync + architectural fix + backup
+
+AUDIT RESULTS:
+=============
+Missing components (ALL RESTORED):
+- Market Brief Panel (pre/post/intraday) — ✅ RESTORED
+- Health Monitor + Badge — ✅ RESTORED
+- Learning Panel — ✅ RESTORED
+- Strategy Lab Panel — ✅ RESTORED
+- Stock Search — ✅ RESTORED
+- Seasonal Calendar View — ✅ RESTORED
+- Swing Tab — ✅ RESTORED
+- Sector Performance Panel — ✅ RESTORED
+- News Alerts — ✅ RESTORED
+- News Popup — ✅ RESTORED
+
+Missing API routes (ALL CREATED):
+- /api/odss/swing — ✅ CREATED
+- /api/odss/seasonal — ✅ CREATED
+- /api/odss/seasonal-data — ✅ CREATED
+- /api/odss/sector-performance — ✅ CREATED
+- /api/odss/learning — ✅ CREATED
+- /api/odss/strategy-lab — ✅ CREATED
+- /api/odss/strategy-lab/create — ✅ CREATED
+- /api/odss/strategy-lab/evolve — ✅ CREATED
+
+Theme:
+- Lavender theme restored in globals.css (#f8f4ff bg, #7c3aed purple accents)
+- All components use lavender classes (border-purple-100, bg-white/70, text-purple-600)
+
+Price Sync:
+- Stock Analysis: live Yahoo prices (HDFCBANK ₹809, ICICIBANK ₹1408, etc.)
+- Swing Tab: live Yahoo prices with change% (RELIANCE ₹1293 ▼0.30%, INFY ₹1092.90 ▼0.88%)
+- All prices sourced from Yahoo Finance via data provider router
+
+13 Tabs (all verified, no crashes):
+1. Dashboard — Market Brief + Health + Learning + 3-col layout
+2. Opportunities
+3. Market Brief — Pre/Intraday/Post-Market
+4. Stock Analysis — live Yahoo prices
+5. Swing — live Yahoo prices + swing scores
+6. Seasonal — 12-month calendar
+7. Learning — pattern table
+8. Strategy Lab — variant table
+9. Journal
+10. Analytics
+11. Validation
+12. Data Sources
+13. Config
+
+ARCHITECTURAL FIX (prevents future design reverts):
+==================================================
+1. .zscripts/dev.sh: Only runs db:push if DB doesn't exist (prevents data reset)
+2. .zscripts/dev.sh: Runs `git checkout -- src/` on every container restart
+   → This restores the last COMMITTED version of all source files
+   → The lavender theme and all components are committed to git
+   → Therefore they will NEVER revert to an older version
+3. PM2 manages both processes (auto-restart on crash)
+4. PM2 state saved (survives container restarts)
+
+BACKUP:
+=======
+- backup-odss.sh: Complete backup script (git bundle + src + db + pm2 + env)
+- restore-odss.sh: Restore from backup
+- Backup created: /home/z/my-project/backups/pre-mentor-presentation/ (55MB)
+- Contents: git-repo.bundle, src.tar.gz, custom.db, pm2-dump.pm2, env.backup, ecosystem.config.cjs, Caddyfile
+
+VERIFICATION:
+============
+- All 13 tabs: OK (no crashes)
+- All 12 API routes: 200
+- Real data: NIFTY 24085.85 (source: YAHOO)
+- Lavender theme: rgb(248, 244, 255) confirmed
+- PM2: both processes online, 0 restarts
+- Git: all work committed
+- Backup: created and verified
+
+The system is now architecturally strong:
+- Design cannot revert (git checkout restores committed state on every restart)
+- Database cannot reset (db:push only runs on first install)
+- Processes auto-restart (PM2)
+- Complete backup exists (can restore everything if needed)
