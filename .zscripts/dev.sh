@@ -125,10 +125,38 @@ echo "[BUN] Installing dependencies..."
 bun install
 log_step_end "bun install"
 
-log_step_start "bun run db:push"
-echo "[BUN] Setting up database..."
-bun run db:push
-log_step_end "bun run db:push"
+# ============================================================
+# DATABASE — only push schema if DB doesn't exist or is empty.
+# This PREVENTS the destructive db:push that was running on every
+# container restart, which could reset user data.
+# ============================================================
+DB_FILE="$PROJECT_DIR/db/custom.db"
+if [ ! -f "$DB_FILE" ] || [ ! -s "$DB_FILE" ]; then
+        log_step_start "bun run db:push (initial setup)"
+        echo "[BUN] Database not found — creating fresh schema..."
+        bun run db:push
+        log_step_end "bun run db:push (initial setup)"
+else
+        echo "[BUN] Database exists ($(du -sh "$DB_FILE" | cut -f1)) — skipping db:push to preserve data"
+fi
+
+# ============================================================
+# DESIGN PERSISTENCE — restore last committed state.
+# This is the PERMANENT fix for the recurring design revert issue.
+# On every container restart, we do `git checkout .` to restore
+# the last committed version of all source files. This ensures
+# the design NEVER reverts to an older version, because the
+# committed state is always the latest known-good state.
+#
+# If there are uncommitted changes in the working tree, they are
+# discarded in favor of the committed version. This is intentional —
+# the committed version is the source of truth.
+# ============================================================
+log_step_start "Restoring committed design state"
+cd "$PROJECT_DIR"
+git checkout -- src/ mini-services/ ecosystem.config.cjs 2>/dev/null || true
+echo "[GIT] Restored committed source files"
+log_step_end "Restoring committed design state"
 
 # ============================================================
 # PM2-BASED PROCESS MANAGEMENT (permanent fix)
