@@ -360,3 +360,90 @@ Stage Summary:
 - All work committed to git
 - Startup script modified to use PM2 instead of orphaned processes
 - This should permanently resolve the recurring design revert + login page issue
+
+---
+Task ID: AUTH-FIX-FINAL
+Agent: main
+Task: System architect audit — find why login page persists with old design
+
+AUDIT FINDINGS (layer by layer):
+================================
+
+Layer 1 — Process Management: ✅ HEALTHY
+- PM2 manages both odss-web (PID 7235) and odss-market (PID 5601)
+- Both online, auto-restart on crash, treekill enabled
+- odss-market uptime: 50 minutes, 0 restarts
+- odss-web uptime: 16 seconds (just restarted for auth.ts change)
+
+Layer 2 — Build State: ✅ HEALTHY
+- Dev mode (no BUILD_ID, .next/dev/ directory exists)
+- page.tsx on disk is identical to git HEAD
+- No stale production build being served
+
+Layer 3 — Code State: ✅ HEALTHY
+- page.tsx last modified Jul 12 23:08 (stable, not reverting)
+- All commits present in git history
+- Working tree clean (only db/custom.db changes)
+
+Layer 4 — Database: ✅ HEALTHY
+- Admin user exists (username: admin, role: admin)
+- Password hash validates correctly (bcrypt $2b$10$...)
+- ensureSeedUsers() runs on startup
+
+Layer 5 — NextAuth Configuration: ❌ WAS BROKEN (NOW FIXED)
+- NEXTAUTH_SECRET: not in .env, uses hardcoded fallback (stable across restarts)
+- trustHost: was MISSING → NOW SET TO true
+- useSecureCookies: was implicit true → NOW conditional (only HTTPS prod)
+- Session maxAge: 30 days (extended in previous task)
+
+Layer 6 — Caddy Gateway: ✅ HEALTHY
+- Port 81 proxies to localhost:3000 correctly
+- Passes Host, X-Forwarded-Host, X-Forwarded-Proto headers
+- All headers reach NextAuth properly
+
+Layer 7 — Browser/Preview Panel: ✅ NOW WORKING
+- Login through gateway now succeeds
+- Session cookie set with 30-day expiry
+- Page reload shows dashboard (not login screen)
+
+ROOT CAUSE (FINAL ANSWER):
+==========================
+The login page persisted because NextAuth's CSRF protection SILENTLY REJECTED
+all login attempts that came through the Caddy gateway (port 81). The gateway
+forwards the browser's Host header (e.g., "localhost:81" or the preview panel
+URL), but NextAuth was comparing it against the internal server URL
+(localhost:3000). When they didn't match, NextAuth:
+1. Redirected to /api/auth/signin?csrf=true (CSRF failure)
+2. Did NOT set the next-auth.session-token cookie
+3. The browser stayed on the login page indefinitely
+
+This was NOT a design revert, NOT a code loss, NOT a session expiry issue.
+It was a CSRF validation failure caused by missing `trustHost: true` in the
+NextAuth configuration.
+
+THE FIX:
+========
+Added to src/lib/auth.ts:
+  trustHost: true,
+  useSecureCookies: process.env.NODE_ENV === 'production' && process.env.NEXTAUTH_URL?.startsWith('https'),
+
+This makes NextAuth trust the Host header from the Caddy reverse proxy,
+fixing CSRF validation for all gateway/preview panel access patterns.
+
+VERIFICATION (E2E through Caddy gateway):
+=========================================
+1. Cleared all browser cookies
+2. Opened http://localhost:81/ → login screen appeared (correct)
+3. Logged in with admin/admin123 → login succeeded
+4. Reloaded http://localhost:81/ → DASHBOARD appeared (not login!)
+5. All 9 tabs visible (Dashboard, Opportunities, Stock Analysis, etc.)
+6. Real Yahoo data flowing (NIFTY: 24052.05, source: YAHOO)
+
+This is the PERMANENT fix. The login page will no longer persist after login.
+
+WHAT THE USER NEEDS TO DO:
+==========================
+1. Clear browser cookies for the preview domain (one-time, to remove old failed-login cookies)
+2. Hard-refresh the page (Ctrl+Shift+R)
+3. Log in with admin / admin123
+4. The session will persist for 30 days
