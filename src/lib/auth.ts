@@ -41,7 +41,10 @@ declare module 'next-auth/jwt' {
 export const authOptions: NextAuthOptions = {
   session: {
     strategy: 'jwt',
-    maxAge: 60 * 60 * 24 * 7, // 7 days
+    // Extended to 30 days so users don't have to re-login after every
+    // container restart or weekly session expiry. The JWT is signed
+    // and stored client-side, so it survives server restarts.
+    maxAge: 60 * 60 * 24 * 30, // 30 days
   },
   pages: {
     // We don't ship a dedicated /auth/signin page — login is an overlay on /.
