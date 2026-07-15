@@ -464,15 +464,15 @@ model PaperTrade {
 model PaperFund {
   id              String   @id @default(cuid())
   // Single-row table (enforced at app level)
-  startingCapital Float    @default(100000) // ₹1,00,000
-  currentBalance  Float    @default(100000)
+  startingCapital Float    @default(500000) // ₹5,00,000
+  currentBalance  Float    @default(500000)
   realizedPnl     Float    @default(0)
   openPositions   Int      @default(0)
   totalTrades     Int      @default(0)
   winningTrades   Int      @default(0)
   losingTrades    Int      @default(0)
   maxDrawdown     Float    @default(0)
-  peakBalance     Float    @default(100000)
+  peakBalance     Float    @default(500000)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }

@@ -1,0 +1,1040 @@
+     1→'use client';
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from 'react';
+     4→import {
+     5→  Card,
+     6→  CardContent,
+     7→  CardHeader,
+     8→  CardTitle,
+     9→} from '@/components/ui/card';
+    10→import { Button } from '@/components/ui/button';
+    11→import { Badge } from '@/components/ui/badge';
+    12→import { Input } from '@/components/ui/input';
+    13→import { Label } from '@/components/ui/label';
+    14→import {
+    15→  Table,
+    16→  TableBody,
+    17→  TableCell,
+    18→  TableHead,
+    19→  TableHeader,
+    20→  TableRow,
+    21→} from '@/components/ui/table';
+    22→import {
+    23→  Select,
+    24→  SelectContent,
+    25→  SelectItem,
+    26→  SelectGroup,
+    27→  SelectLabel,
+    28→  SelectTrigger,
+    29→  SelectValue,
+    30→} from '@/components/ui/select';
+    31→import {
+    32→  AlertDialog,
+    33→  AlertDialogAction,
+    34→  AlertDialogCancel,
+    35→  AlertDialogContent,
+    36→  AlertDialogDescription,
+    37→  AlertDialogFooter,
+    38→  AlertDialogHeader,
+    39→  AlertDialogTitle,
+    40→  AlertDialogTrigger,
+    41→} from '@/components/ui/alert-dialog';
+    42→import {
+    43→  Wallet,
+    44→  TrendingUp,
+    45→  TrendingDown,
+    46→  Plus,
+    47→  X,
+    48→  RefreshCw,
+    49→  Loader2,
+    50→  Target,
+    51→  AlertTriangle,
+    52→} from 'lucide-react';
+    53→import { cn } from '@/lib/utils';
+    54→import { ALL_SYMBOLS, getSymbolMeta } from '@/lib/odss/universe';
+    55→
+    56→/* -------------------------------------------------------------------------- */
+    57→/*  Types (mirror API contract)                                               */
+    58→/* -------------------------------------------------------------------------- */
+    59→
+    60→interface PaperFundState {
+    61→  id: string | null;
+    62→  startingCapital: number;
+    63→  currentBalance: number;
+    64→  realizedPnl: number;
+    65→  openPositions: number;
+    66→  totalTrades: number;
+    67→  winningTrades: number;
+    68→  losingTrades: number;
+    69→  maxDrawdown: number;
+    70→  peakBalance: number;
+    71→  source: string;
+    72→}
+    73→
+    74→interface PerformanceState {
+    75→  totalTrades: number;
+    76→  winningTrades: number;
+    77→  losingTrades: number;
+    78→  winRate: number;
+    79→  totalPnl: number;
+    80→  avgR: number;
+    81→  profitFactor: number | null;
+    82→  maxDrawdown: number;
+    83→  currentBalance: number;
+    84→  startingCapital: number;
+    85→  returnPct: number;
+    86→  source: string;
+    87→}
+    88→
+    89→interface PaperTrade {
+    90→  id: string;
+    91→  symbol: string;
+    92→  direction: string; // CE | PE
+    93→  strategy: string;
+    94→  variantGroup?: string | null;
+    95→  variantId?: string | null;
+    96→  entryStrike: number;
+    97→  entryPrice: number;
+    98→  entryTime: string;
+    99→  entryUnderlying: number;
+   100→  entryType: string;
+   101→  quantity: number;
+   102→  lotSize: number;
+   103→  exitPrice?: number | null;
+   104→  exitTime?: string | null;
+   105→  exitUnderlying?: number | null;
+   106→  exitReason?: string | null;
+   107→  grossPnl: number;
+   108→  totalCosts: number;
+   109→  netPnl: number;
+   110→  rMultiple: number;
+   111→  marketState?: string | null;
+   112→  vixAtEntry?: number | null;
+   113→  sectorAtEntry?: string | null;
+   114→  status: string; // OPEN | CLOSED
+   115→}
+   116→
+   117→interface TradesResponse {
+   118→  open: PaperTrade[];
+   119→  closed: PaperTrade[];
+   120→  source: string;
+   121→}
+   122→
+   123→/* -------------------------------------------------------------------------- */
+   124→/*  Strategy options (exported by strategy-variants.ts)                       */
+   125→/* -------------------------------------------------------------------------- */
+   126→
+   127→const STRATEGY_OPTIONS = [
+   128→  { value: 'LONG_CALL', label: 'LONG_CALL · Buy CE' },
+   129→  { value: 'LONG_PUT', label: 'LONG_PUT · Buy PE' },
+   130→  { value: 'MomentumLongCall', label: 'MomentumLongCall · ATM CE' },
+   131→  { value: 'TrendFollowLongPut', label: 'TrendFollowLongPut · ATM PE' },
+   132→  { value: 'BreakoutITMCall', label: 'BreakoutITMCall · ITM CE' },
+   133→  { value: 'MeanReversionOTMPut', label: 'MeanReversionOTMPut · OTM PE' },
+   134→  { value: 'VWAPBounceLong', label: 'VWAPBounceLong · ATM CE' },
+   135→] as const;
+   136→
+   137→/* -------------------------------------------------------------------------- */
+   138→/*  Helpers                                                                    */
+   139→/* -------------------------------------------------------------------------- */
+   140→
+   141→const inr = (n: number, decimals = 2): string => {
+   142→  if (!Number.isFinite(n)) return '—';
+   143→  const sign = n < 0 ? '-' : '';
+   144→  const abs = Math.abs(n);
+   145→  return `${sign}₹${abs.toLocaleString('en-IN', {
+   146→    minimumFractionDigits: decimals,
+   147→    maximumFractionDigits: decimals,
+   148→  })}`;
+   149→};
+   150→
+   151→const num = (n: number, decimals = 2): string => {
+   152→  if (!Number.isFinite(n)) return '—';
+   153→  return n.toLocaleString('en-IN', {
+   154→    minimumFractionDigits: decimals,
+   155→    maximumFractionDigits: decimals,
+   156→  });
+   157→};
+   158→
+   159→/** Bull/bear color class for P&L values. */
+   160→function pnlColor(n: number): string {
+   161→  if (!Number.isFinite(n) || n === 0) return 'text-muted-foreground';
+   162→  return n > 0 ? 'text-emerald-600' : 'text-rose-500';
+   163→}
+   164→
+   165→/** Bull/bear color class for R-multiples. */
+   166→function rColor(r: number): string {
+   167→  if (!Number.isFinite(r) || r === 0) return 'text-muted-foreground';
+   168→  return r > 0 ? 'text-emerald-600' : 'text-rose-500';
+   169→}
+   170→
+   171→function dirBadgeClass(dir: string): string {
+   172→  if (dir === 'CE') return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+   173→  if (dir === 'PE') return 'border-rose-200 bg-rose-50 text-rose-600';
+   174→  return 'border-purple-200 bg-purple-50 text-purple-700';
+   175→}
+   176→
+   177→/** Estimate the live premium of an open trade using its entry BS inputs. */
+   178→function estimateCurrentPremium(trade: PaperTrade, refUnderlying?: number): number {
+   179→  // Without a live feed, we estimate using a simple intrinsic-value proxy:
+   180→  //   CE: max(S - K, 0) + time value (~ entry price decay)
+   181→  //   PE: max(K - S, 0) + time value
+   182→  // This is intentionally rough — the real exit price is computed server-side
+   183→  // via Black-Scholes when the user clicks CLOSE.
+   184→  const S = refUnderlying ?? trade.entryUnderlying;
+   185→  const K = trade.entryStrike;
+   186→  const intrinsic = trade.direction === 'CE' ? Math.max(S - K, 0) : Math.max(K - S, 0);
+   187→  // Time-value decay: assume 5% per day since entry, floor 0
+   188→  const elapsedDays = (Date.now() - new Date(trade.entryTime).getTime()) / 86_400_000;
+   189→  const decay = Math.max(0, 1 - 0.05 * elapsedDays);
+   190→  const tv = Math.max(0, trade.entryPrice - (trade.direction === 'CE'
+   191→    ? Math.max(trade.entryUnderlying - K, 0)
+   192→    : Math.max(K - trade.entryUnderlying, 0)));
+   193→  return Math.max(0.05, intrinsic + tv * decay);
+   194→}
+   195→
+   196→function estimatePnl(trade: PaperTrade, refUnderlying?: number): number {
+   197→  const cur = estimateCurrentPremium(trade, refUnderlying);
+   198→  const totalShares = trade.quantity * trade.lotSize;
+   199→  return (cur - trade.entryPrice) * totalShares;
+   200→}
+   201→
+   202→function estimateR(trade: PaperTrade, refUnderlying?: number): number {
+   203→  const pnl = estimatePnl(trade, refUnderlying);
+   204→  const totalShares = trade.quantity * trade.lotSize;
+   205→  const initialRisk = trade.entryPrice * totalShares * 0.25; // 25% SL default
+   206→  return initialRisk > 0 ? pnl / initialRisk : 0;
+   207→}
+   208→
+   209→function formatTime(iso?: string | null): string {
+   210→  if (!iso) return '—';
+   211→  const d = new Date(iso);
+   212→  if (Number.isNaN(d.getTime())) return '—';
+   213→  return d.toLocaleString('en-IN', {
+   214→    day: '2-digit',
+   215→    month: 'short',
+   216→    hour: '2-digit',
+   217→    minute: '2-digit',
+   218→    hour12: false,
+   219→  });
+   220→}
+   221→
+   222→/* -------------------------------------------------------------------------- */
+   223→/*  Component                                                                  */
+   224→/* -------------------------------------------------------------------------- */
+   225→
+   226→export function PaperTradingPanel() {
+   227→  /* ---- State ---- */
+   228→  const [fund, setFund] = useState<PaperFundState | null>(null);
+   229→  const [perf, setPerf] = useState<PerformanceState | null>(null);
+   230→  const [trades, setTrades] = useState<TradesResponse | null>(null);
+   231→  const [loading, setLoading] = useState(true);
+   232→  const [error, setError] = useState<string | null>(null);
+   233→
+   234→  // New-trade form
+   235→  const [formSymbol, setFormSymbol] = useState<string>('NIFTY');
+   236→  const [formDirection, setFormDirection] = useState<'CE' | 'PE'>('CE');
+   237→  const [formStrike, setFormStrike] = useState<string>('');
+   238→  const [formUnderlying, setFormUnderlying] = useState<string>('');
+   239→  const [formStrategy, setFormStrategy] = useState<string>('LONG_CALL');
+   240→  const [formQty, setFormQty] = useState<string>('1');
+   241→  const [submitting, setSubmitting] = useState(false);
+   242→  const [formMsg, setFormMsg] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
+   243→
+   244→  // Close-trade dialog
+   245→  const [closeTarget, setCloseTarget] = useState<PaperTrade | null>(null);
+   246→  const [closeUnderlying, setCloseUnderlying] = useState<string>('');
+   247→  const [closing, setClosing] = useState(false);
+   248→
+   249→  // Reset
+   250→  const [resetting, setResetting] = useState(false);
+   251→  const [resetOpen, setResetOpen] = useState(false);
+   252→
+   253→  /* ---- Data fetch ---- */
+   254→  const fetchAll = useCallback(async () => {
+   255→    try {
+   256→      const [fRes, pRes, tRes] = await Promise.all([
+   257→        fetch('/api/odss/paper-trading/fund', { cache: 'no-store' }),
+   258→        fetch('/api/odss/paper-trading/performance', { cache: 'no-store' }),
+   259→        fetch('/api/odss/paper-trading/trades', { cache: 'no-store' }),
+   260→      ]);
+   261→      if (!fRes.ok || !pRes.ok || !tRes.ok) {
+   262→        throw new Error(`HTTP ${fRes.status}/${pRes.status}/${tRes.status}`);
+   263→      }
+   264→      const [f, p, t] = await Promise.all([fRes.json(), pRes.json(), tRes.json()]);
+   265→      setFund(f as PaperFundState);
+   266→      setPerf(p as PerformanceState);
+   267→      setTrades(t as TradesResponse);
+   268→      setError(null);
+   269→    } catch (e) {
+   270→      setError(e instanceof Error ? e.message : 'Failed to load paper-trading data');
+   271→    } finally {
+   272→      setLoading(false);
+   273→    }
+   274→  }, []);
+   275→
+   276→  useEffect(() => {
+   277→    fetchAll();
+   278→    const id = setInterval(fetchAll, 10_000);
+   279→    return () => clearInterval(id);
+   280→  }, [fetchAll]);
+   281→
+   282→  /* ---- Auto-prefill form underlying & strike from symbol meta ---- */
+   283→  useEffect(() => {
+   284→    const meta = getSymbolMeta(formSymbol);
+   285→    if (meta) {
+   286→      setFormUnderlying(String(meta.basePrice));
+   287→      setFormStrike(String(Math.round(meta.basePrice / meta.strikeStep) * meta.strikeStep));
+   288→    }
+   289→  }, [formSymbol]);
+   290→
+   291→  /* ---- Actions ---- */
+   292→  async function submitNewTrade(e: React.FormEvent) {
+   293→    e.preventDefault();
+   294→    if (submitting) return;
+   295→    setFormMsg(null);
+   296→
+   297→    const strike = parseFloat(formStrike);
+   298→    const underlying = parseFloat(formUnderlying);
+   299→    const qty = parseInt(formQty, 10);
+   300→
+   301→    if (!formSymbol) return setFormMsg({ type: 'err', text: 'Pick a symbol' });
+   302→    if (!Number.isFinite(strike) || strike <= 0) return setFormMsg({ type: 'err', text: 'Strike must be > 0' });
+   303→    if (!Number.isFinite(underlying) || underlying <= 0) return setFormMsg({ type: 'err', text: 'Underlying must be > 0' });
+   304→    if (!Number.isFinite(qty) || qty <= 0) return setFormMsg({ type: 'err', text: 'Quantity must be ≥ 1' });
+   305→
+   306→    setSubmitting(true);
+   307→    try {
+   308→      const res = await fetch('/api/odss/paper-trading/trades', {
+   309→        method: 'POST',
+   310→        headers: { 'Content-Type': 'application/json' },
+   311→        body: JSON.stringify({
+   312→          symbol: formSymbol,
+   313→          direction: formDirection,
+   314→          entryStrike: strike,
+   315→          entryUnderlying: underlying,
+   316→          strategy: formStrategy,
+   317→          quantity: qty,
+   318→        }),
+   319→      });
+   320→      const json = await res.json().catch(() => ({} as any));
+   321→      if (!res.ok || !json?.ok) {
+   322→        throw new Error(json?.error || `HTTP ${res.status}`);
+   323→      }
+   324→      setFormMsg({
+   325→        type: 'ok',
+   326→        text: `Opened ${formSymbol} ${formDirection} · entry ₹${num(json.entryPrice)} · costs ₹${num(json.costs)}`,
+   327→      });
+   328→      await fetchAll();
+   329→    } catch (e) {
+   330→      setFormMsg({ type: 'err', text: e instanceof Error ? e.message : 'Open failed' });
+   331→    } finally {
+   332→      setSubmitting(false);
+   333→      setTimeout(() => setFormMsg(null), 6000);
+   334→    }
+   335→  }
+   336→
+   337→  async function submitCloseTrade() {
+   338→    if (!closeTarget) return;
+   339→    const exitUnderlying = parseFloat(closeUnderlying);
+   340→    if (!Number.isFinite(exitUnderlying) || exitUnderlying <= 0) return;
+   341→
+   342→    setClosing(true);
+   343→    try {
+   344→      const res = await fetch('/api/odss/paper-trading/close', {
+   345→        method: 'POST',
+   346→        headers: { 'Content-Type': 'application/json' },
+   347→        body: JSON.stringify({
+   348→          tradeId: closeTarget.id,
+   349→          exitUnderlying,
+   350→          exitReason: 'MANUAL',
+   351→        }),
+   352→      });
+   353→      const json = await res.json().catch(() => ({} as any));
+   354→      if (!res.ok || !json?.ok) {
+   355→        throw new Error(json?.error || `HTTP ${res.status}`);
+   356→      }
+   357→      setCloseTarget(null);
+   358→      await fetchAll();
+   359→    } catch (e) {
+   360→      setFormMsg({ type: 'err', text: e instanceof Error ? e.message : 'Close failed' });
+   361→      setTimeout(() => setFormMsg(null), 6000);
+   362→    } finally {
+   363→      setClosing(false);
+   364→    }
+   365→  }
+   366→
+   367→  async function submitReset() {
+   368→    setResetting(true);
+   369→    try {
+   370→      const res = await fetch('/api/odss/paper-trading/reset', { method: 'POST' });
+   371→      const json = await res.json().catch(() => ({} as any));
+   372→      if (!res.ok || !json?.ok) {
+   373→        throw new Error(json?.error || `HTTP ${res.status}`);
+   374→      }
+   375→      setResetOpen(false);
+   376→      await fetchAll();
+   377→    } catch (e) {
+   378→      setFormMsg({ type: 'err', text: e instanceof Error ? e.message : 'Reset failed' });
+   379→      setTimeout(() => setFormMsg(null), 6000);
+   380→    } finally {
+   381→      setResetting(false);
+   382→    }
+   383→  }
+   384→
+   385→  /* ---- Derived ---- */
+   386→  const openTrades = useMemo(() => trades?.open ?? [], [trades]);
+   387→  const closedTrades = useMemo(
+   388→    () => (trades?.closed ?? []).slice(0, 20),
+   389→    [trades],
+   390→  );
+   391→
+   392→  const startingCapital = fund?.startingCapital ?? 100_000;
+   393→  const currentBalance = fund?.currentBalance ?? 100_000;
+   394→  const realizedPnl = fund?.realizedPnl ?? 0;
+   395→  const openPositions = fund?.openPositions ?? 0;
+   396→  const winRate = perf?.winRate ?? 0;
+   397→  const returnPct = perf?.returnPct ?? 0;
+   398→
+   399→  /* ----------------------------------------------------------------------- */
+   400→  /*  Render                                                                  */
+   401→  /* ----------------------------------------------------------------------- */
+   402→
+   403→  return (
+   404→    <Card className="border-purple-100 bg-white/70 backdrop-blur-sm">
+   405→      <CardHeader className="pb-2">
+   406→        <CardTitle className="flex items-center justify-between gap-2 text-sm">
+   407→          <span className="flex items-center gap-2 font-bold tracking-tight">
+   408→            <span className="flex h-7 w-7 items-center justify-center rounded-md border border-purple-200 bg-purple-50">
+   409→              <Wallet className="h-4 w-4 text-purple-600" />
+   410→            </span>
+   411→            <span className="text-purple-700">PAPER TRADING</span>
+   412→            <span className="ml-1 font-mono text-[10px] font-normal tracking-wider text-muted-foreground">
+   413→              Simulated options trades · Black-Scholes pricing · Indian-market costs
+   414→            </span>
+   415→          </span>
+   416→          <div className="flex items-center gap-1.5">
+   417→            {/* Reset with confirmation */}
+   418→            <AlertDialog open={resetOpen} onOpenChange={setResetOpen}>
+   419→              <AlertDialogTrigger asChild>
+   420→                <Button
+   421→                  size="sm"
+   422→                  variant="outline"
+   423→                  className="h-7 border-rose-200 bg-white/70 px-2 font-mono text-[10px] tracking-wider text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+   424→                >
+   425→                  <RefreshCw className="mr-1 h-3 w-3" />
+   426→                  RESET FUND
+   427→                </Button>
+   428→              </AlertDialogTrigger>
+   429→              <AlertDialogContent className="border-purple-100">
+   430→                <AlertDialogHeader>
+   431→                  <AlertDialogTitle className="text-sm font-bold text-purple-700">
+   432→                    Reset Paper Fund?
+   433→                  </AlertDialogTitle>
+   434→                  <AlertDialogDescription className="text-xs text-muted-foreground">
+   435→                    This will close all open trades at their entry price (no P&L) and
+   436→                    reset the fund balance to ₹{startingCapital.toLocaleString('en-IN')}.
+   437→                    Win/loss tallies and drawdown will be zeroed. This cannot be undone.
+   438→                  </AlertDialogDescription>
+   439→                </AlertDialogHeader>
+   440→                <AlertDialogFooter>
+   441→                  <AlertDialogCancel className="h-8 font-mono text-[11px]">
+   442→                    Cancel
+   443→                  </AlertDialogCancel>
+   444→                  <AlertDialogAction
+   445→                    onClick={submitReset}
+   446→                    disabled={resetting}
+   447→                    className="h-8 border border-rose-200 bg-rose-50 font-mono text-[11px] text-rose-700 hover:bg-rose-100 hover:text-rose-800"
+   448→                  >
+   449→                    {resetting ? (
+   450→                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+   451→                    ) : (
+   452→                      <RefreshCw className="mr-1 h-3 w-3" />
+   453→                    )}
+   454→                    CONFIRM RESET
+   455→                  </AlertDialogAction>
+   456→                </AlertDialogFooter>
+   457→              </AlertDialogContent>
+   458→            </AlertDialog>
+   459→
+   460→            <button
+   461→              type="button"
+   462→              onClick={fetchAll}
+   463→              disabled={loading}
+   464→              className="inline-flex h-7 w-7 items-center justify-center rounded border border-purple-100 bg-white/70 text-purple-600 transition-colors hover:bg-purple-50 disabled:opacity-50"
+   465→              title="Refresh now"
+   466→            >
+   467→              {loading ? (
+   468→                <Loader2 className="h-3 w-3 animate-spin" />
+   469→              ) : (
+   470→                <RefreshCw className="h-3 w-3" />
+   471→              )}
+   472→            </button>
+   473→          </div>
+   474→        </CardTitle>
+   475→      </CardHeader>
+   476→
+   477→      <CardContent className="space-y-3">
+   478→        {/* ---------------- Fund Summary ---------------- */}
+   479→        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+   480→          <FundStat
+   481→            label="Start Capital"
+   482→            value={inr(startingCapital, 0)}
+   483→            tone="text-purple-600"
+   484→            dot="bg-purple-400"
+   485→          />
+   486→          <FundStat
+   487→            label="Balance"
+   488→            value={inr(currentBalance, 0)}
+   489→            tone={currentBalance >= startingCapital ? 'text-emerald-600' : 'text-rose-500'}
+   490→            dot={currentBalance >= startingCapital ? 'bg-emerald-400' : 'bg-rose-400'}
+   491→          />
+   492→          <FundStat
+   493→            label="Realized P&L"
+   494→            value={inr(realizedPnl)}
+   495→            tone={pnlColor(realizedPnl)}
+   496→            dot={realizedPnl >= 0 ? 'bg-emerald-400' : 'bg-rose-400'}
+   497→          />
+   498→          <FundStat
+   499→            label="Return %"
+   500→            value={`${returnPct >= 0 ? '+' : ''}${num(returnPct)}%`}
+   501→            tone={returnPct >= 0 ? 'text-emerald-600' : 'text-rose-500'}
+   502→            dot={returnPct >= 0 ? 'bg-emerald-400' : 'bg-rose-400'}
+   503→          />
+   504→          <FundStat
+   505→            label="Win Rate"
+   506→            value={`${num(winRate, 1)}%`}
+   507→            tone={winRate >= 50 ? 'text-emerald-600' : winRate > 0 ? 'text-amber-600' : 'text-muted-foreground'}
+   508→            dot={winRate >= 50 ? 'bg-emerald-400' : 'bg-amber-400'}
+   509→          />
+   510→          <FundStat
+   511→            label="Open Positions"
+   512→            value={String(openPositions)}
+   513→            tone={openPositions > 0 ? 'text-purple-600' : 'text-muted-foreground'}
+   514→            dot="bg-violet-400"
+   515→          />
+   516→        </div>
+   517→
+   518→        {/* ---------------- Performance Stats ---------------- */}
+   519→        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+   520→          <PerfStat
+   521→            label="Total Trades"
+   522→            value={String(perf?.totalTrades ?? 0)}
+   523→            icon={<Target className="h-3 w-3" />}
+   524→          />
+   525→          <PerfStat
+   526→            label="Winners"
+   527→            value={String(perf?.winningTrades ?? 0)}
+   528→            tone="text-emerald-600"
+   529→            icon={<TrendingUp className="h-3 w-3" />}
+   530→          />
+   531→          <PerfStat
+   532→            label="Losers"
+   533→            value={String(perf?.losingTrades ?? 0)}
+   534→            tone="text-rose-500"
+   535→            icon={<TrendingDown className="h-3 w-3" />}
+   536→          />
+   537→          <PerfStat
+   538→            label="Avg R"
+   539→            value={num(perf?.avgR ?? 0, 2)}
+   540→            tone={rColor(perf?.avgR ?? 0)}
+   541→          />
+   542→          <PerfStat
+   543→            label="Profit Factor"
+   544→            value={perf?.profitFactor == null ? '∞' : num(perf.profitFactor, 2)}
+   545→            tone={(perf?.profitFactor ?? 0) >= 1 ? 'text-emerald-600' : 'text-rose-500'}
+   546→          />
+   547→          <PerfStat
+   548→            label="Max DD"
+   549→            value={`${num(perf?.maxDrawdown ?? 0, 1)}%`}
+   550→            tone="text-rose-500"
+   551→          />
+   552→        </div>
+   553→
+   554→        {/* ---------------- Action feedback ---------------- */}
+   555→        {formMsg && (
+   556→          <div
+   557→            className={cn(
+   558→              'flex items-center gap-2 rounded-md px-3 py-2 text-xs',
+   559→              formMsg.type === 'ok'
+   560→                ? 'border border-emerald-200 bg-emerald-50 text-emerald-700'
+   561→                : 'border border-rose-200 bg-rose-50 text-rose-700',
+   562→            )}
+   563→          >
+   564→            {formMsg.type === 'ok' ? (
+   565→              <Plus className="h-3.5 w-3.5" />
+   566→            ) : (
+   567→              <AlertTriangle className="h-3.5 w-3.5" />
+   568→            )}
+   569→            <span className="font-mono">{formMsg.text}</span>
+   570→          </div>
+   571→        )}
+   572→
+   573→        {error && !fund && (
+   574→          <div className="flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-700">
+   575→            <AlertTriangle className="h-3.5 w-3.5" />
+   576→            <span>{error}</span>
+   577→          </div>
+   578→        )}
+   579→
+   580→        {/* ---------------- New Trade Form ---------------- */}
+   581→        <div className="rounded-lg border border-purple-100 bg-white/60 p-3">
+   582→          <div className="mb-2 flex items-center gap-1.5">
+   583→            <Plus className="h-3 w-3 text-purple-600" />
+   584→            <span className="text-sm font-bold text-purple-700">Open New Paper Trade</span>
+   585→          </div>
+   586→          <form
+   587→            onSubmit={submitNewTrade}
+   588→            className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6"
+   589→          >
+   590→            {/* Symbol */}
+   591→            <div className="space-y-1">
+   592→              <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+   593→                Symbol
+   594→              </Label>
+   595→              <Select value={formSymbol} onValueChange={setFormSymbol}>
+   596→                <SelectTrigger className="h-8 w-full border-purple-100 bg-white font-mono text-[11px]">
+   597→                  <SelectValue placeholder="Symbol" />
+   598→                </SelectTrigger>
+   599→                <SelectContent className="max-h-72">
+   600→                  <SelectGroup>
+   601→                    <SelectLabel className="font-mono text-[10px] text-purple-600">Indices</SelectLabel>
+   602→                    {ALL_SYMBOLS.filter((s) => s.type === 'INDEX').map((s) => (
+   603→                      <SelectItem key={s.symbol} value={s.symbol} className="font-mono text-[11px]">
+   604→                        {s.symbol}
+   605→                      </SelectItem>
+   606→                    ))}
+   607→                  </SelectGroup>
+   608→                  <SelectGroup>
+   609→                    <SelectLabel className="font-mono text-[10px] text-purple-600">Stocks</SelectLabel>
+   610→                    {ALL_SYMBOLS.filter((s) => s.type === 'STOCK').map((s) => (
+   611→                      <SelectItem key={s.symbol} value={s.symbol} className="font-mono text-[11px]">
+   612→                        {s.symbol}
+   613→                      </SelectItem>
+   614→                    ))}
+   615→                  </SelectGroup>
+   616→                </SelectContent>
+   617→              </Select>
+   618→            </div>
+   619→
+   620→            {/* Direction */}
+   621→            <div className="space-y-1">
+   622→              <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+   623→                Direction
+   624→              </Label>
+   625→              <Select
+   626→                value={formDirection}
+   627→                onValueChange={(v) => setFormDirection(v as 'CE' | 'PE')}
+   628→              >
+   629→                <SelectTrigger className="h-8 w-full border-purple-100 bg-white font-mono text-[11px]">
+   630→                  <SelectValue />
+   631→                </SelectTrigger>
+   632→                <SelectContent>
+   633→                  <SelectItem value="CE" className="font-mono text-[11px]">CE · Call</SelectItem>
+   634→                  <SelectItem value="PE" className="font-mono text-[11px]">PE · Put</SelectItem>
+   635→                </SelectContent>
+   636→              </Select>
+   637→            </div>
+   638→
+   639→            {/* Strike */}
+   640→            <div className="space-y-1">
+   641→              <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+   642→                Strike
+   643→              </Label>
+   644→              <Input
+   645→                type="number"
+   646→                step="any"
+   647→                value={formStrike}
+   648→                onChange={(e) => setFormStrike(e.target.value)}
+   649→                className="h-8 border-purple-100 bg-white font-mono text-[11px]"
+   650→                placeholder="24800"
+   651→              />
+   652→            </div>
+   653→
+   654→            {/* Underlying */}
+   655→            <div className="space-y-1">
+   656→              <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+   657→                Underlying
+   658→              </Label>
+   659→              <Input
+   660→                type="number"
+   661→                step="any"
+   662→                value={formUnderlying}
+   663→                onChange={(e) => setFormUnderlying(e.target.value)}
+   664→                className="h-8 border-purple-100 bg-white font-mono text-[11px]"
+   665→                placeholder="24800"
+   666→              />
+   667→            </div>
+   668→
+   669→            {/* Strategy */}
+   670→            <div className="space-y-1">
+   671→              <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+   672→                Strategy
+   673→              </Label>
+   674→              <Select value={formStrategy} onValueChange={setFormStrategy}>
+   675→                <SelectTrigger className="h-8 w-full border-purple-100 bg-white font-mono text-[11px]">
+   676→                  <SelectValue />
+   677→                </SelectTrigger>
+   678→                <SelectContent className="max-h-72">
+   679→                  {STRATEGY_OPTIONS.map((s) => (
+   680→                    <SelectItem key={s.value} value={s.value} className="font-mono text-[11px]">
+   681→                      {s.label}
+   682→                    </SelectItem>
+   683→                  ))}
+   684→                </SelectContent>
+   685→              </Select>
+   686→            </div>
+   687→
+   688→            {/* Qty + Submit */}
+   689→            <div className="space-y-1">
+   690→              <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+   691→                Qty (lots)
+   692→              </Label>
+   693→              <div className="flex gap-1">
+   694→                <Input
+   695→                  type="number"
+   696→                  min="1"
+   697→                  step="1"
+   698→                  value={formQty}
+   699→                  onChange={(e) => setFormQty(e.target.value)}
+   700→                  className="h-8 w-16 border-purple-100 bg-white font-mono text-[11px]"
+   701→                  placeholder="1"
+   702→                />
+   703→                <Button
+   704→                  type="submit"
+   705→                  disabled={submitting}
+   706→                  className="h-8 flex-1 border border-purple-200 bg-purple-50 font-mono text-[10px] font-bold tracking-wider text-purple-700 hover:bg-purple-100 hover:text-purple-800"
+   707→                >
+   708→                  {submitting ? (
+   709→                    <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+   710→                  ) : (
+   711→                    <Plus className="mr-1 h-3 w-3" />
+   712→                  )}
+   713→                  OPEN
+   714→                </Button>
+   715→              </div>
+   716→            </div>
+   717→          </form>
+   718→        </div>
+   719→
+   720→        {/* ---------------- Loading state ---------------- */}
+   721→        {loading && !trades && (
+   722→          <div className="flex items-center justify-center gap-2 py-12 text-xs text-muted-foreground">
+   723→            <Loader2 className="h-3.5 w-3.5 animate-spin text-purple-500" />
+   724→            <span className="font-mono tracking-wider">Loading paper trades…</span>
+   725→          </div>
+   726→        )}
+   727→
+   728→        {/* ---------------- Open Trades Table ---------------- */}
+   729→        {trades && (
+   730→          <div>
+   731→            <div className="mb-1.5 flex items-center justify-between">
+   732→              <h3 className="text-sm font-bold text-purple-700">
+   733→                Open Positions
+   734→                <span className="ml-1.5 font-mono text-[10px] font-normal text-muted-foreground">
+   735→                  ({openTrades.length})
+   736→                </span>
+   737→              </h3>
+   738→            </div>
+   739→            <div className="max-h-72 overflow-y-auto rounded-md border border-purple-100 bg-white/50">
+   740→              <Table className="text-xs">
+   741→                <TableHeader className="sticky top-0 z-10 bg-purple-50/95 backdrop-blur">
+   742→                  <TableRow className="border-purple-100 hover:bg-transparent">
+   743→                    <TableHead className="h-7 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Symbol</TableHead>
+   744→                    <TableHead className="h-7 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Dir</TableHead>
+   745→                    <TableHead className="h-7 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Strategy</TableHead>
+   746→                    <TableHead className="h-7 text-right font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Strike</TableHead>
+   747→                    <TableHead className="h-7 text-right font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Entry ₹</TableHead>
+   748→                    <TableHead className="h-7 text-right font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Cur ₹</TableHead>
+   749→                    <TableHead className="h-7 text-right font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Qty</TableHead>
+   750→                    <TableHead className="h-7 text-right font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Est P&L</TableHead>
+   751→                    <TableHead className="h-7 text-right font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Est R</TableHead>
+   752→                    <TableHead className="h-7 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Opened</TableHead>
+   753→                    <TableHead className="h-7 text-right font-mono text-[9px] uppercase tracking-wider text-muted-foreground"></TableHead>
+   754→                  </TableRow>
+   755→                </TableHeader>
+   756→                <TableBody className="font-mono">
+   757→                  {openTrades.length === 0 && (
+   758→                    <TableRow>
+   759→                      <TableCell colSpan={11} className="py-8 text-center font-sans text-xs text-muted-foreground">
+   760→                        No open positions. Use the form above to open a paper trade.
+   761→                      </TableCell>
+   762→                    </TableRow>
+   763→                  )}
+   764→                  {openTrades.map((t) => {
+   765→                    const exitRef = parseFloat(formUnderlying) || undefined;
+   766→                    const estPnl = estimatePnl(t, exitRef);
+   767→                    const estR = estimateR(t, exitRef);
+   768→                    const curPrem = estimateCurrentPremium(t, exitRef);
+   769→                    return (
+   770→                      <TableRow
+   771→                        key={t.id}
+   772→                        className="border-purple-50 text-[10px] transition-colors hover:bg-purple-50/40"
+   773→                      >
+   774→                        <TableCell className="font-sans text-xs font-bold text-purple-700">
+   775→                          {t.symbol}
+   776→                        </TableCell>
+   777→                        <TableCell>
+   778→                          <Badge
+   779→                            variant="outline"
+   780→                            className={cn(
+   781→                              'h-5 px-1.5 font-mono text-[9px] font-bold tracking-wider',
+   782→                              dirBadgeClass(t.direction),
+   783→                            )}
+   784→                          >
+   785→                            {t.direction}
+   786→                          </Badge>
+   787→                        </TableCell>
+   788→                        <TableCell className="font-mono text-[10px] text-muted-foreground">
+   789→                          {t.strategy}
+   790→                        </TableCell>
+   791→                        <TableCell className="text-right tnum">{num(t.entryStrike, 0)}</TableCell>
+   792→                        <TableCell className="text-right tnum">{num(t.entryPrice)}</TableCell>
+   793→                        <TableCell className="text-right tnum text-purple-600">{num(curPrem)}</TableCell>
+   794→                        <TableCell className="text-right tnum">
+   795→                          {t.quantity}×{t.lotSize}
+   796→                        </TableCell>
+   797→                        <TableCell className={cn('text-right font-bold tnum', pnlColor(estPnl))}>
+   798→                          {estPnl >= 0 ? '+' : ''}{inr(estPnl)}
+   799→                        </TableCell>
+   800→                        <TableCell className={cn('text-right tnum', rColor(estR))}>
+   801→                          {estR >= 0 ? '+' : ''}{num(estR, 2)}R
+   802→                        </TableCell>
+   803→                        <TableCell className="text-left text-[9px] text-muted-foreground">
+   804→                          {formatTime(t.entryTime)}
+   805→                        </TableCell>
+   806→                        <TableCell className="text-right">
+   807→                          <Button
+   808→                            size="sm"
+   809→                            variant="outline"
+   810→                            onClick={() => {
+   811→                              setCloseTarget(t);
+   812→                              setCloseUnderlying(String(t.entryUnderlying));
+   813→                            }}
+   814→                            className="h-6 border-rose-200 bg-white/70 px-1.5 font-mono text-[9px] tracking-wider text-rose-600 hover:bg-rose-50 hover:text-rose-700"
+   815→                          >
+   816→                            <X className="mr-0.5 h-3 w-3" />
+   817→                            CLOSE
+   818→                          </Button>
+   819→                        </TableCell>
+   820→                      </TableRow>
+   821→                    );
+   822→                  })}
+   823→                </TableBody>
+   824→              </Table>
+   825→            </div>
+   826→          </div>
+   827→        )}
+   828→
+   829→        {/* ---------------- Trade History Table ---------------- */}
+   830→        {trades && (
+   831→          <div>
+   832→            <div className="mb-1.5 flex items-center justify-between">
+   833→              <h3 className="text-sm font-bold text-purple-700">
+   834→                Trade History
+   835→                <span className="ml-1.5 font-mono text-[10px] font-normal text-muted-foreground">
+   836→                  (recent {closedTrades.length})
+   837→                </span>
+   838→              </h3>
+   839→            </div>
+   840→            <div className="max-h-96 overflow-y-auto rounded-md border border-purple-100 bg-white/50">
+   841→              <Table className="text-xs">
+   842→                <TableHeader className="sticky top-0 z-10 bg-purple-50/95 backdrop-blur">
+   843→                  <TableRow className="border-purple-100 hover:bg-transparent">
+   844→                    <TableHead className="h-7 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Symbol</TableHead>
+   845→                    <TableHead className="h-7 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Dir</TableHead>
+   846→                    <TableHead className="h-7 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Strategy</TableHead>
+   847→                    <TableHead className="h-7 text-right font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Entry ₹</TableHead>
+   848→                    <TableHead className="h-7 text-right font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Exit ₹</TableHead>
+   849→                    <TableHead className="h-7 text-right font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Underlying</TableHead>
+   850→                    <TableHead className="h-7 text-right font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Net P&L</TableHead>
+   851→                    <TableHead className="h-7 text-right font-mono text-[9px] uppercase tracking-wider text-muted-foreground">R</TableHead>
+   852→                    <TableHead className="h-7 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Reason</TableHead>
+   853→                    <TableHead className="h-7 font-mono text-[9px] uppercase tracking-wider text-muted-foreground">Closed</TableHead>
+   854→                  </TableRow>
+   855→                </TableHeader>
+   856→                <TableBody className="font-mono">
+   857→                  {closedTrades.length === 0 && (
+   858→                    <TableRow>
+   859→                      <TableCell colSpan={10} className="py-8 text-center font-sans text-xs text-muted-foreground">
+   860→                        No closed trades yet. Closed positions will appear here with full P&L and R-multiple.
+   861→                      </TableCell>
+   862→                    </TableRow>
+   863→                  )}
+   864→                  {closedTrades.map((t) => (
+   865→                    <TableRow
+   866→                      key={t.id}
+   867→                      className="border-purple-50 text-[10px] transition-colors hover:bg-purple-50/40"
+   868→                    >
+   869→                      <TableCell className="font-sans text-xs font-bold text-purple-700">
+   870→                        {t.symbol}
+   871→                      </TableCell>
+   872→                      <TableCell>
+   873→                        <Badge
+   874→                          variant="outline"
+   875→                          className={cn(
+   876→                            'h-5 px-1.5 font-mono text-[9px] font-bold tracking-wider',
+   877→                            dirBadgeClass(t.direction),
+   878→                          )}
+   879→                        >
+   880→                          {t.direction}
+   881→                        </Badge>
+   882→                      </TableCell>
+   883→                      <TableCell className="font-mono text-[10px] text-muted-foreground">
+   884→                        {t.strategy}
+   885→                      </TableCell>
+   886→                      <TableCell className="text-right tnum">{num(t.entryPrice)}</TableCell>
+   887→                      <TableCell className="text-right tnum">
+   888→                        {t.exitPrice != null ? num(t.exitPrice) : '—'}
+   889→                      </TableCell>
+   890→                      <TableCell className="text-right tnum text-muted-foreground">
+   891→                        {t.exitUnderlying != null ? num(t.exitUnderlying, 0) : '—'}
+   892→                      </TableCell>
+   893→                      <TableCell className={cn('text-right font-bold tnum', pnlColor(t.netPnl))}>
+   894→                        {t.netPnl >= 0 ? '+' : ''}{inr(t.netPnl)}
+   895→                      </TableCell>
+   896→                      <TableCell className={cn('text-right tnum', rColor(t.rMultiple))}>
+   897→                        {t.rMultiple >= 0 ? '+' : ''}{num(t.rMultiple, 2)}R
+   898→                      </TableCell>
+   899→                      <TableCell>
+   900→                        <Badge
+   901→                          variant="outline"
+   902→                          className="h-5 px-1.5 font-mono text-[9px] tracking-wider border-purple-100 bg-purple-50/50 text-purple-600"
+   903→                        >
+   904→                          {t.exitReason ?? '—'}
+   905→                        </Badge>
+   906→                      </TableCell>
+   907→                      <TableCell className="text-left text-[9px] text-muted-foreground">
+   908→                        {formatTime(t.exitTime)}
+   909→                      </TableCell>
+   910→                    </TableRow>
+   911→                  ))}
+   912→                </TableBody>
+   913→              </Table>
+   914→            </div>
+   915→          </div>
+   916→        )}
+   917→      </CardContent>
+   918→
+   919→      {/* ---------------- Close Trade Dialog ---------------- */}
+   920→      <AlertDialog open={!!closeTarget} onOpenChange={(o) => !o && setCloseTarget(null)}>
+   921→        <AlertDialogContent className="border-purple-100">
+   922→          <AlertDialogHeader>
+   923→            <AlertDialogTitle className="flex items-center gap-2 text-sm font-bold text-purple-700">
+   924→              <X className="h-4 w-4 text-rose-500" />
+   925→              Close Paper Trade
+   926→            </AlertDialogTitle>
+   927→            <AlertDialogDescription className="text-xs text-muted-foreground">
+   928→              {closeTarget && (
+   929→                <span className="font-mono">
+   930→                  {closeTarget.symbol}{' '}
+   931→                  <span className={cn('font-bold', closeTarget.direction === 'CE' ? 'text-emerald-700' : 'text-rose-600')}>
+   932→                    {closeTarget.direction}
+   933→                  </span>{' '}
+   934→                  · strike {num(closeTarget.entryStrike, 0)} · entry ₹{num(closeTarget.entryPrice)} ·{' '}
+   935→                  {closeTarget.quantity}×{closeTarget.lotSize} shares
+   936→                </span>
+   937→              )}
+   938→              <br />
+   939→              <span className="mt-1 block">
+   940→                Enter the exit underlying price. Exit premium will be computed via Black-Scholes.
+   941→              </span>
+   942→            </AlertDialogDescription>
+   943→          </AlertDialogHeader>
+   944→
+   945→          <div className="space-y-1.5">
+   946→            <Label className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+   947→              Exit Underlying Price
+   948→            </Label>
+   949→            <Input
+   950→              type="number"
+   951→              step="any"
+   952→              value={closeUnderlying}
+   953→              onChange={(e) => setCloseUnderlying(e.target.value)}
+   954→              className="h-8 border-purple-100 bg-white font-mono text-[11px]"
+   955→              autoFocus
+   956→            />
+   957→          </div>
+   958→
+   959→          <AlertDialogFooter>
+   960→            <AlertDialogCancel className="h-8 font-mono text-[11px]">
+   961→              Cancel
+   962→            </AlertDialogCancel>
+   963→            <AlertDialogAction
+   964→              onClick={(e) => {
+   965→                e.preventDefault();
+   966→                submitCloseTrade();
+   967→              }}
+   968→              disabled={closing}
+   969→              className="h-8 border border-rose-200 bg-rose-50 font-mono text-[11px] text-rose-700 hover:bg-rose-100 hover:text-rose-800"
+   970→            >
+   971→              {closing ? (
+   972→                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+   973→              ) : (
+   974→                <X className="mr-1 h-3 w-3" />
+   975→              )}
+   976→              CLOSE TRADE
+   977→            </AlertDialogAction>
+   978→          </AlertDialogFooter>
+   979→        </AlertDialogContent>
+   980→      </AlertDialog>
+   981→    </Card>
+   982→  );
+   983→}
+   984→
+   985→/* -------------------------------------------------------------------------- */
+   986→/*  Sub-components                                                             */
+   987→/* -------------------------------------------------------------------------- */
+   988→
+   989→function FundStat({
+   990→  label,
+   991→  value,
+   992→  tone,
+   993→  dot,
+   994→}: {
+   995→  label: string;
+   996→  value: string;
+   997→  tone: string;
+   998→  dot: string;
+   999→}) {
+  1000→  return (
+  1001→    <div className="rounded-lg border border-purple-100 bg-white/60 px-3 py-2">
+  1002→      <div className="flex items-center gap-1.5">
+  1003→        <span className={cn('h-1.5 w-1.5 rounded-full', dot)} />
+  1004→        <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+  1005→          {label}
+  1006→        </span>
+  1007→      </div>
+  1008→      <div className={cn('mt-0.5 font-mono text-sm font-bold tnum', tone)}>
+  1009→        {value}
+  1010→      </div>
+  1011→    </div>
+  1012→  );
+  1013→}
+  1014→
+  1015→function PerfStat({
+  1016→  label,
+  1017→  value,
+  1018→  tone = 'text-foreground',
+  1019→  icon,
+  1020→}: {
+  1021→  label: string;
+  1022→  value: string;
+  1023→  tone?: string;
+  1024→  icon?: React.ReactNode;
+  1025→}) {
+  1026→  return (
+  1027→    <div className="rounded-lg border border-purple-100 bg-white/60 px-3 py-2">
+  1028→      <div className="flex items-center gap-1.5 text-muted-foreground">
+  1029→        {icon}
+  1030→        <span className="font-mono text-[10px] uppercase tracking-widest">
+  1031→          {label}
+  1032→        </span>
+  1033→      </div>
+  1034→      <div className={cn('mt-0.5 font-mono text-sm font-bold tnum', tone)}>
+  1035→        {value}
+  1036→      </div>
+  1037→    </div>
+  1038→  );
+  1039→}
+  1040→
