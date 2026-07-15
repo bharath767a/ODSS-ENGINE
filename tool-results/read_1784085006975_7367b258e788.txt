@@ -1,0 +1,545 @@
+     1→'use client';
+     2→
+     3→import { useState, useEffect } from 'react';
+     4→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+     5→import { Button } from '@/components/ui/button';
+     6→import { Input } from '@/components/ui/input';
+     7→import { Badge } from '@/components/ui/badge';
+     8→import { ScrollArea } from '@/components/ui/scroll-area';
+     9→import { Search, TrendingUp, TrendingDown, Minus, Sparkles, Loader2, ChevronLeft, Building2, DollarSign, BarChart3, Heart, Users, Calendar, Target } from 'lucide-react';
+    10→import { useODSS } from '@/hooks/use-odss';
+    11→import { cn } from '@/lib/utils';
+    12→import { ALL_SYMBOLS } from '@/lib/odss/universe';
+    13→import { useToast } from '@/hooks/use-toast';
+    14→
+    15→interface FundamentalResponse {
+    16→  data: any;
+    17→  score: any;
+    18→  recommendation: any;
+    19→  currentPrice: number;
+    20→}
+    21→
+    22→export function StockAnalysisTab() {
+    23→  const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
+    24→  const [search, setSearch] = useState('');
+    25→  const [fundamental, setFundamental] = useState<FundamentalResponse | null>(null);
+    26→  const [loading, setLoading] = useState(false);
+    27→  const [story, setStory] = useState<any>(null);
+    28→  const [storyLoading, setStoryLoading] = useState(false);
+    29→  const [livePrices, setLivePrices] = useState<Record<string, { price: number; changePct: number; source: string }>>({});
+    30→  const { toast } = useToast();
+    31→
+    32→  const stocks = ALL_SYMBOLS.filter((s) => s.type === 'STOCK');
+    33→  const filtered = stocks.filter((s) =>
+    34→    !search || s.symbol.toLowerCase().includes(search.toLowerCase()) || s.name.toLowerCase().includes(search.toLowerCase())
+    35→  );
+    36→
+    37→  // Fetch live prices for all stocks in the list (from Yahoo via the quote API)
+    38→  useEffect(() => {
+    39→    let mounted = true;
+    40→    async function fetchLivePrices() {
+    41→      const prices: Record<string, { price: number; changePct: number; source: string }> = {};
+    42→      // Fetch in batches of 5 to avoid overwhelming the API
+    43→      const batchSize = 5;
+    44→      for (let i = 0; i < filtered.length; i += batchSize) {
+    45→        const batch = filtered.slice(i, i + batchSize);
+    46→        await Promise.allSettled(
+    47→          batch.map(async (s) => {
+    48→            try {
+    49→              const res = await fetch(`/api/odss/quote/${s.symbol}`);
+    50→              if (res.ok) {
+    51→                const q = await res.json();
+    52→                if (q.ltp > 0) {
+    53→                  prices[s.symbol] = {
+    54→                    price: q.ltp,
+    55→                    changePct: q.changePct ?? 0,
+    56→                    source: q.source ?? 'UNKNOWN',
+    57→                  };
+    58→                }
+    59→              }
+    60→            } catch {
+    61→              // individual quote failed — skip
+    62→            }
+    63→          }),
+    64→        );
+    65→      }
+    66→      if (mounted) setLivePrices(prices);
+    67→    }
+    68→    fetchLivePrices();
+    69→    const id = setInterval(fetchLivePrices, 30000); // refresh every 30s
+    70→    return () => {
+    71→      mounted = false;
+    72→      clearInterval(id);
+    73→    };
+    74→  }, [search]); // re-fetch when search changes (filtered list changes)
+    75→
+    76→  useEffect(() => {
+    77→    if (!selectedSymbol) {
+    78→      setFundamental(null);
+    79→      setStory(null);
+    80→      return;
+    81→    }
+    82→    setLoading(true);
+    83→    setStory(null);
+    84→    fetch(`/api/odss/fundamentals/${selectedSymbol}`)
+    85→      .then((r) => r.json())
+    86→      .then((d) => { if (d.data) setFundamental(d); })
+    87→      .finally(() => setLoading(false));
+    88→  }, [selectedSymbol]);
+    89→
+    90→  const fetchStory = async () => {
+    91→    if (!selectedSymbol) return;
+    92→    setStoryLoading(true);
+    93→    try {
+    94→      const res = await fetch(`/api/odss/stock-story/${selectedSymbol}`, { method: 'POST' });
+    95→      const data = await res.json();
+    96→      setStory(data.story);
+    97→    } catch (e: any) {
+    98→      toast({ title: 'Failed to generate story', description: e.message, variant: 'destructive' });
+    99→    } finally {
+   100→      setStoryLoading(false);
+   101→    }
+   102→  };
+   103→
+   104→  if (selectedSymbol && fundamental) {
+   105→    return (
+   106→      <StockAnalysisView
+   107→        data={fundamental}
+   108→        onBack={() => { setSelectedSymbol(null); setStory(null); }}
+   109→        story={story}
+   110→        storyLoading={storyLoading}
+   111→        onGenerateStory={fetchStory}
+   112→      />
+   113→    );
+   114→  }
+   115→
+   116→  return (
+   117→    <div className="space-y-3">
+   118→      <Card className="accent-ai border-border/50 bg-card/50 backdrop-blur-sm">
+   119→        <CardHeader className="pb-2">
+   120→          <CardTitle className="flex items-center gap-2 text-sm">
+   121→            <Building2 className="h-4 w-4 text-ai" />
+   122→            <span className="text-gradient-ai text-base font-bold">STOCK ANALYSIS</span>
+   123→            <span className="ml-2 text-xs font-normal text-muted-foreground">Fundamental Analysis · P/E · EPS · Debt · Quarterly Results · Buy/Sell/Hold</span>
+   124→          </CardTitle>
+   125→        </CardHeader>
+   126→        <CardContent>
+   127→          <div className="relative mb-3">
+   128→            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   129→            <Input
+   130→              placeholder="Search stocks by name or symbol..."
+   131→              value={search}
+   132→              onChange={(e) => setSearch(e.target.value)}
+   133→              className="bg-background/60 pl-9"
+   134→            />
+   135→          </div>
+   136→          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+   137→            {filtered.map((s) => (
+   138→              <button
+   139→                key={s.symbol}
+   140→                onClick={() => setSelectedSymbol(s.symbol)}
+   141→                className={cn(
+   142→                  'group relative overflow-hidden rounded-lg border border-border/50 bg-card/40 p-3 text-left transition-all hover:border-ai/40 hover:bg-ai/5',
+   143→                  selectedSymbol === s.symbol && 'border-ai/60 bg-ai/10'
+   144→                )}
+   145→              >
+   146→                <div className="font-mono text-sm font-bold text-foreground">{s.symbol}</div>
+   147→                <div className="truncate text-[10px] text-muted-foreground">{s.name}</div>
+   148→                <div className="mt-1 flex items-center justify-between">
+   149→                  <Badge variant="outline" className="text-[9px]">{s.sector}</Badge>
+   150→                  {livePrices[s.symbol] ? (
+   151→                    <span className={cn(
+   152→                      'font-mono text-[10px]',
+   153→                      livePrices[s.symbol].changePct >= 0 ? 'text-bull' : 'text-bear',
+   154→                    )}>
+   155→                      ₹{livePrices[s.symbol].price.toFixed(0)}
+   156→                    </span>
+   157→                  ) : (
+   158→                    <span className="font-mono text-[10px] text-muted-foreground">₹{s.basePrice.toFixed(0)}</span>
+   159→                  )}
+   160→                </div>
+   161→              </button>
+   162→            ))}
+   163→          </div>
+   164→        </CardContent>
+   165→      </Card>
+   166→    </div>
+   167→  );
+   168→}
+   169→
+   170→// ============================================================
+   171→// FULL STOCK ANALYSIS VIEW
+   172→// ============================================================
+   173→function StockAnalysisView({ data, onBack, story, storyLoading, onGenerateStory }: {
+   174→  data: FundamentalResponse;
+   175→  onBack: () => void;
+   176→  story: any;
+   177→  storyLoading: boolean;
+   178→  onGenerateStory: () => void;
+   179→}) {
+   180→  const { data: fund, score, recommendation: rec, currentPrice } = data;
+   181→  const actionColors: Record<string, string> = {
+   182→    STRONG_BUY: 'text-bull bg-bull/20 border-bull/50 glow-bull',
+   183→    BUY: 'text-bull bg-bull/15 border-bull/40',
+   184→    HOLD: 'text-warn bg-warn/15 border-warn/40',
+   185→    SELL: 'text-bear bg-bear/15 border-bear/40',
+   186→    STRONG_SELL: 'text-bear bg-bear/20 border-bear/50 glow-bear',
+   187→  };
+   188→  const actionLabels: Record<string, string> = {
+   189→    STRONG_BUY: 'STRONG BUY', BUY: 'BUY', HOLD: 'HOLD', SELL: 'SELL', STRONG_SELL: 'STRONG SELL',
+   190→  };
+   191→
+   192→  return (
+   193→    <div className="space-y-3">
+   194→      {/* Back button + header */}
+   195→      <div className="flex items-center gap-3">
+   196→        <Button variant="ghost" size="sm" onClick={onBack} className="gap-1">
+   197→          <ChevronLeft className="h-4 w-4" /> Back
+   198→        </Button>
+   199→        <div className="flex-1">
+   200→          <h2 className="text-lg font-bold">
+   201→            {fund.profile.name}
+   202→            <span className="ml-2 font-mono text-sm text-muted-foreground">({fund.profile.symbol})</span>
+   203→          </h2>
+   204→          <p className="text-xs text-muted-foreground">{fund.profile.industry} · Market Cap: ₹{(fund.profile.marketCap / 1000).toFixed(1)}K Cr</p>
+   205→        </div>
+   206→        <div className="text-right">
+   207→          <div className="font-mono text-xl font-bold">₹{currentPrice.toFixed(2)}</div>
+   208→          <div className={cn('inline-flex items-center rounded border px-2 py-0.5 text-xs font-bold', actionColors[rec.action])}>
+   209→            {actionLabels[rec.action]} · {rec.confidence}%
+   210→          </div>
+   211→        </div>
+   212→      </div>
+   213→
+   214→      {/* Score + Buy/Sell/Hold meter */}
+   215→      <div className="grid gap-3 lg:grid-cols-3">
+   216→        {/* Fundamental Score */}
+   217→        <Card className="accent-ai border-border/50 bg-card/50 backdrop-blur-sm">
+   218→          <CardHeader className="pb-2"><CardTitle className="text-sm">Fundamental Score</CardTitle></CardHeader>
+   219→          <CardContent className="flex items-center justify-around">
+   220→            <ScoreGauge value={score.total} rating={score.rating} />
+   221→            <div className="space-y-1">
+   222→              <ScoreBar label="Valuation" value={score.valuation} />
+   223→              <ScoreBar label="Growth" value={score.growth} />
+   224→              <ScoreBar label="Profitability" value={score.profitability} />
+   225→              <ScoreBar label="Health" value={score.financialHealth} />
+   226→              <ScoreBar label="Quality" value={score.quality} />
+   227→            </div>
+   228→          </CardContent>
+   229→        </Card>
+   230→
+   231→        {/* Buy/Sell/Hold */}
+   232→        <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+   233→          <CardHeader className="pb-2"><CardTitle className="text-sm">Recommendation</CardTitle></CardHeader>
+   234→          <CardContent className="space-y-2">
+   235→            <div className={cn('rounded-lg border p-3 text-center', actionColors[rec.action])}>
+   236→              <div className="text-2xl font-bold">{actionLabels[rec.action]}</div>
+   237→              <div className="text-xs opacity-80">{rec.confidence}% confidence · {rec.riskLevel} risk · {rec.timeHorizon} term</div>
+   238→            </div>
+   239→            <div className="grid grid-cols-2 gap-2 text-xs">
+   240→              <div className="rounded border border-border/40 bg-muted/20 p-2">
+   241→                <div className="text-muted-foreground">Fair Value</div>
+   242→                <div className="font-mono font-bold text-foreground">₹{rec.fairValue}</div>
+   243→              </div>
+   244→              <div className={cn('rounded border p-2', rec.upsideDownside >= 0 ? 'border-bull/30 bg-bull/10' : 'border-bear/30 bg-bear/10')}>
+   245→                <div className="text-muted-foreground">Upside/Downside</div>
+   246→                <div className={cn('font-mono font-bold', rec.upsideDownside >= 0 ? 'text-bull' : 'text-bear')}>
+   247→                  {rec.upsideDownside >= 0 ? '+' : ''}{rec.upsideDownside.toFixed(1)}%
+   248→                </div>
+   249→              </div>
+   250→            </div>
+   251→            <p className="text-[11px] text-muted-foreground">{rec.reasoning}</p>
+   252→          </CardContent>
+   253→        </Card>
+   254→
+   255→        {/* Key Metrics */}
+   256→        <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+   257→          <CardHeader className="pb-2"><CardTitle className="text-sm">Key Signals</CardTitle></CardHeader>
+   258→          <CardContent className="space-y-1">
+   259→            {rec.keyMetrics.map((m: any, i: number) => (
+   260→              <div key={i} className="flex items-center justify-between text-xs">
+   261→                <span className="text-muted-foreground">{m.label}</span>
+   262→                <div className="flex items-center gap-2">
+   263→                  <span className="font-mono font-bold text-foreground">{m.value}</span>
+   264→                  {m.signal === 'BULLISH' && <TrendingUp className="h-3 w-3 text-bull" />}
+   265→                  {m.signal === 'BEARISH' && <TrendingDown className="h-3 w-3 text-bear" />}
+   266→                  {m.signal === 'NEUTRAL' && <Minus className="h-3 w-3 text-muted-foreground" />}
+   267→                </div>
+   268→              </div>
+   269→            ))}
+   270→          </CardContent>
+   271→        </Card>
+   272→      </div>
+   273→
+   274→      {/* Valuation + Earnings */}
+   275→      <div className="grid gap-3 lg:grid-cols-2">
+   276→        <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+   277→          <CardHeader className="pb-2">
+   278→            <CardTitle className="flex items-center gap-2 text-sm">
+   279→              <DollarSign className="h-4 w-4 text-bull" /> Valuation Metrics
+   280→            </CardTitle>
+   281→          </CardHeader>
+   282→          <CardContent>
+   283→            <div className="grid grid-cols-3 gap-2 text-xs">
+   284→              <Metric label="P/E Ratio" value={fund.valuation.peRatio.toFixed(1)} sub={`Sector: ${fund.valuation.sectorPE}`} good={fund.valuation.premiumDiscount < 0} bad={fund.valuation.premiumDiscount > 25} />
+   285→              <Metric label="Forward P/E" value={fund.valuation.forwardPE.toFixed(1)} sub="Next year" good={fund.valuation.forwardPE < fund.valuation.peRatio} />
+   286→              <Metric label="P/B Ratio" value={fund.valuation.pbRatio.toFixed(2)} />
+   287→              <Metric label="EV/EBITDA" value={fund.valuation.evEbitda.toFixed(1)} />
+   288→              <Metric label="PEG Ratio" value={fund.valuation.pegRatio.toFixed(2)} good={fund.valuation.pegRatio < 1} bad={fund.valuation.pegRatio > 2.5} />
+   289→              <Metric label="Div Yield" value={`${fund.valuation.dividendYield.toFixed(2)}%`} good={fund.valuation.dividendYield > 2} />
+   290→            </div>
+   291→            <div className={cn('mt-2 rounded p-2 text-xs', fund.valuation.premiumDiscount < 0 ? 'bg-bull/10 text-bull' : 'bg-bear/10 text-bear')}>
+   292→              Trading at {Math.abs(fund.valuation.premiumDiscount).toFixed(1)}% {fund.valuation.premiumDiscount > 0 ? 'premium to' : 'discount to'} sector P/E
+   293→            </div>
+   294→          </CardContent>
+   295→        </Card>
+   296→
+   297→        <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+   298→          <CardHeader className="pb-2">
+   299→            <CardTitle className="flex items-center gap-2 text-sm">
+   300→              <BarChart3 className="h-4 w-4 text-info" /> Earnings & Profitability
+   301→            </CardTitle>
+   302→          </CardHeader>
+   303→          <CardContent>
+   304→            <div className="grid grid-cols-3 gap-2 text-xs">
+   305→              <Metric label="EPS (TTM)" value={`₹${fund.earnings.eps.toFixed(2)}`} sub={`Fwd: ₹${fund.earnings.forwardEPS.toFixed(2)}`} />
+   306→              <Metric label="EPS Growth" value={`${fund.earnings.epsGrowthYoY.toFixed(1)}%`} good={fund.earnings.epsGrowthYoY > 15} bad={fund.earnings.epsGrowthYoY < 5} />
+   307→              <Metric label="3Y EPS CAGR" value={`${fund.earnings.epsGrowth3Y.toFixed(1)}%`} good={fund.earnings.epsGrowth3Y > 15} />
+   308→              <Metric label="Revenue" value={`₹${(fund.earnings.revenue / 1000).toFixed(1)}K Cr`} sub={`+${fund.earnings.revenueGrowthYoY.toFixed(1)}% YoY`} />
+   309→              <Metric label="ROE" value={`${fund.earnings.roe.toFixed(1)}%`} good={fund.earnings.roe > 18} bad={fund.earnings.roe < 10} />
+   310→              <Metric label="ROCE" value={`${fund.earnings.roce.toFixed(1)}%`} good={fund.earnings.roce > 18} bad={fund.earnings.roce < 12} />
+   311→              <Metric label="Op Margin" value={`${fund.earnings.operatingMargin.toFixed(1)}%`} />
+   312→              <Metric label="Net Margin" value={`${fund.earnings.netProfitMargin.toFixed(1)}%`} good={fund.earnings.netProfitMargin > 15} />
+   313→              <Metric label="Net Profit" value={`₹${(fund.earnings.netProfit / 1000).toFixed(1)}K Cr`} />
+   314→            </div>
+   315→          </CardContent>
+   316→        </Card>
+   317→      </div>
+   318→
+   319→      {/* Financial Health + Ownership */}
+   320→      <div className="grid gap-3 lg:grid-cols-2">
+   321→        <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+   322→          <CardHeader className="pb-2">
+   323→            <CardTitle className="flex items-center gap-2 text-sm">
+   324→              <Heart className="h-4 w-4 text-bear" /> Financial Health
+   325→            </CardTitle>
+   326→          </CardHeader>
+   327→          <CardContent>
+   328→            <div className="grid grid-cols-3 gap-2 text-xs">
+   329→              <Metric label="Debt/Equity" value={fund.health.debtToEquity.toFixed(2)} good={fund.health.debtToEquity < 0.5} bad={fund.health.debtToEquity > 2} />
+   330→              <Metric label="Current Ratio" value={fund.health.currentRatio.toFixed(2)} good={fund.health.currentRatio > 1.5} bad={fund.health.currentRatio < 1} />
+   331→              <Metric label="Quick Ratio" value={fund.health.quickRatio.toFixed(2)} />
+   332→              <Metric label="Int. Coverage" value={`${fund.health.interestCoverage.toFixed(1)}x`} good={fund.health.interestCoverage > 5} bad={fund.health.interestCoverage < 2} />
+   333→              <Metric label="Total Debt" value={`₹${(fund.health.totalDebt / 1000).toFixed(1)}K Cr`} />
+   334→              <Metric label="Free Cash Flow" value={`₹${(fund.health.freeCashFlow / 1000).toFixed(1)}K Cr`} good={fund.health.freeCashFlow > 0} bad={fund.health.freeCashFlow < 0} />
+   335→            </div>
+   336→          </CardContent>
+   337→        </Card>
+   338→
+   339→        <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+   340→          <CardHeader className="pb-2">
+   341→            <CardTitle className="flex items-center gap-2 text-sm">
+   342→              <Users className="h-4 w-4 text-ai" /> Ownership & Quality
+   343→            </CardTitle>
+   344→          </CardHeader>
+   345→          <CardContent>
+   346→            <div className="grid grid-cols-2 gap-2 text-xs">
+   347→              <Metric label="Promoter" value={`${fund.ownership.promoterHolding.toFixed(1)}%`} sub={`${fund.ownership.promoterHoldingChange > 0 ? '+' : ''}${fund.ownership.promoterHoldingChange.toFixed(1)}%`} good={fund.ownership.promoterHoldingChange > 0} bad={fund.ownership.promoterHoldingChange < -0.5} />
+   348→              <Metric label="FII" value={`${fund.ownership.fiiHolding.toFixed(1)}%`} sub={`${fund.ownership.fiiHoldingChange > 0 ? '+' : ''}${fund.ownership.fiiHoldingChange.toFixed(1)}%`} good={fund.ownership.fiiHoldingChange > 0} bad={fund.ownership.fiiHoldingChange < -1.5} />
+   349→              <Metric label="DII" value={`${fund.ownership.diiHolding.toFixed(1)}%`} sub={`${fund.ownership.diiHoldingChange > 0 ? '+' : ''}${fund.ownership.diiHoldingChange.toFixed(1)}%`} />
+   350→              <Metric label="Institutional" value={`${fund.ownership.institutionalHolding.toFixed(1)}%`} good={fund.ownership.institutionalHolding > 30} />
+   351→            </div>
+   352→          </CardContent>
+   353→        </Card>
+   354→      </div>
+   355→
+   356→      {/* Quarterly Results */}
+   357→      <Card className="border-border/50 bg-card/50 backdrop-blur-sm">
+   358→        <CardHeader className="pb-2">
+   359→          <CardTitle className="flex items-center gap-2 text-sm">
+   360→            <Calendar className="h-4 w-4 text-warn" /> Quarterly Results
+   361→          </CardTitle>
+   362→        </CardHeader>
+   363→        <CardContent className="p-0">
+   364→          <div className="overflow-x-auto">
+   365→            <table className="w-full text-xs">
+   366→              <thead className="border-b border-border/40">
+   367→                <tr className="text-left font-mono text-[10px] uppercase text-muted-foreground">
+   368→                  <th className="px-3 py-2">Quarter</th>
+   369→                  <th className="px-3 py-2 text-right">Revenue (Cr)</th>
+   370→                  <th className="px-3 py-2 text-right">Net Profit (Cr)</th>
+   371→                  <th className="px-3 py-2 text-right">EPS</th>
+   372→                  <th className="px-3 py-2 text-right">Rev QoQ</th>
+   373→                  <th className="px-3 py-2 text-right">Profit QoQ</th>
+   374→                  <th className="px-3 py-2 text-right">Margin</th>
+   375→                  <th className="px-3 py-2 text-center">Surprise</th>
+   376→                </tr>
+   377→              </thead>
+   378→              <tbody className="font-mono tnum">
+   379→                {fund.quarterly.map((q: any, i: number) => (
+   380→                  <tr key={i} className="border-b border-border/20 hover:bg-info/5">
+   381→                    <td className="px-3 py-2 font-bold text-foreground">{q.quarter}</td>
+   382→                    <td className="px-3 py-2 text-right">{q.revenue.toLocaleString()}</td>
+   383→                    <td className="px-3 py-2 text-right">{q.netProfit.toLocaleString()}</td>
+   384→                    <td className="px-3 py-2 text-right">₹{q.eps.toFixed(2)}</td>
+   385→                    <td className={cn('px-3 py-2 text-right', q.revenueGrowthQoQ >= 0 ? 'text-bull' : 'text-bear')}>{q.revenueGrowthQoQ >= 0 ? '+' : ''}{q.revenueGrowthQoQ.toFixed(1)}%</td>
+   386→                    <td className={cn('px-3 py-2 text-right', q.profitGrowthQoQ >= 0 ? 'text-bull' : 'text-bear')}>{q.profitGrowthQoQ >= 0 ? '+' : ''}{q.profitGrowthQoQ.toFixed(1)}%</td>
+   387→                    <td className="px-3 py-2 text-right">{q.margin.toFixed(1)}%</td>
+   388→                    <td className="px-3 py-2 text-center">
+   389→                      <Badge className={cn('text-[9px]', q.surprise === 'BEAT' ? 'bg-bull/15 text-bull' : q.surprise === 'MISS' ? 'bg-bear/15 text-bear' : 'bg-muted/40 text-muted-foreground')}>
+   390→                        {q.surprise} {q.surprisePct > 0 ? '+' : ''}{q.surprisePct.toFixed(1)}%
+   391→                      </Badge>
+   392→                    </td>
+   393→                  </tr>
+   394→                ))}
+   395→              </tbody>
+   396→            </table>
+   397→          </div>
+   398→        </CardContent>
+   399→      </Card>
+   400→
+   401→      {/* Strengths + Weaknesses */}
+   402→      <div className="grid gap-3 lg:grid-cols-2">
+   403→        <Card className="border-bull/30 bg-card/50 backdrop-blur-sm">
+   404→          <CardHeader className="pb-2"><CardTitle className="text-sm text-bull">✓ Strengths</CardTitle></CardHeader>
+   405→          <CardContent>
+   406→            <ul className="space-y-1 text-xs">
+   407→              {score.strengths.map((s: string, i: number) => (
+   408→                <li key={i} className="flex gap-2 text-foreground/90"><span className="text-bull">▸</span> {s}</li>
+   409→              ))}
+   410→            </ul>
+   411→          </CardContent>
+   412→        </Card>
+   413→        <Card className="border-bear/30 bg-card/50 backdrop-blur-sm">
+   414→          <CardHeader className="pb-2"><CardTitle className="text-sm text-bear">⚠ Weaknesses</CardTitle></CardHeader>
+   415→          <CardContent>
+   416→            <ul className="space-y-1 text-xs">
+   417→              {score.weaknesses.map((w: string, i: number) => (
+   418→                <li key={i} className="flex gap-2 text-foreground/90"><span className="text-bear">▸</span> {w}</li>
+   419→              ))}
+   420→            </ul>
+   421→          </CardContent>
+   422→        </Card>
+   423→      </div>
+   424→
+   425→      {/* AI Stock Story */}
+   426→      <Card className="accent-ai border-ai/30 bg-card/50 backdrop-blur-sm">
+   427→        <CardHeader className="pb-2">
+   428→          <CardTitle className="flex items-center justify-between text-sm">
+   429→            <span className="flex items-center gap-2">
+   430→              <Sparkles className="h-4 w-4 text-ai" />
+   431→              <span className="text-gradient-ai font-bold">AI STOCK STORY</span>
+   432→            </span>
+   433→            <Button size="sm" variant="outline" onClick={onGenerateStory} disabled={storyLoading} className="border-ai/30 text-ai hover:bg-ai/10">
+   434→              {storyLoading ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Sparkles className="mr-1 h-3 w-3" />}
+   435→              {story ? 'Regenerate' : 'Generate Story'}
+   436→            </Button>
+   437→          </CardTitle>
+   438→        </CardHeader>
+   439→        <CardContent>
+   440→          {!story && !storyLoading && (
+   441→            <div className="py-6 text-center text-xs text-muted-foreground">
+   442→              Click "Generate Story" to get a plain-English explanation of {fund.profile.name} — what it does, how it's performing, and whether it's interesting.
+   443→            </div>
+   444→          )}
+   445→          {storyLoading && (
+   446→            <div className="flex items-center justify-center py-6">
+   447→              <Loader2 className="h-5 w-5 animate-spin text-ai" />
+   448→              <span className="ml-2 text-xs text-muted-foreground">Writing the story...</span>
+   449→            </div>
+   450→          )}
+   451→          {story && !storyLoading && (
+   452→            <div className="space-y-3">
+   453→              {story.oneLiner && (
+   454→                <div className="rounded-lg border border-ai/20 bg-ai/5 p-2 text-sm font-medium text-foreground">
+   455→                  {story.oneLiner}
+   456→                </div>
+   457→              )}
+   458→              {story.narrative && (
+   459→                <div className="text-xs leading-relaxed text-foreground/90">
+   460→                  {story.narrative.split('\n').map((p: string, i: number) => <p key={i} className="mb-2">{p}</p>)}
+   461→                </div>
+   462→              )}
+   463→              {story.forBeginners && (
+   464→                <div className="rounded-lg border border-info/20 bg-info/5 p-2">
+   465→                  <div className="mb-1 text-[10px] font-bold uppercase text-info">For Beginners</div>
+   466→                  <p className="text-xs text-foreground/80">{story.forBeginners}</p>
+   467→                </div>
+   468→              )}
+   469→              <div className="grid gap-2 sm:grid-cols-2">
+   470→                {story.greenFlags?.length > 0 && (
+   471→                  <div>
+   472→                    <div className="mb-1 text-[10px] font-bold uppercase text-bull">🟢 Green Flags</div>
+   473→                    <ul className="space-y-0.5 text-[11px] text-foreground/80">
+   474→                      {story.greenFlags.map((f: string, i: number) => <li key={i}>✓ {f}</li>)}
+   475→                    </ul>
+   476→                  </div>
+   477→                )}
+   478→                {story.redFlags?.length > 0 && (
+   479→                  <div>
+   480→                    <div className="mb-1 text-[10px] font-bold uppercase text-bear">🔴 Red Flags</div>
+   481→                    <ul className="space-y-0.5 text-[11px] text-foreground/80">
+   482→                      {story.redFlags.map((f: string, i: number) => <li key={i}>⚠ {f}</li>)}
+   483→                    </ul>
+   484→                  </div>
+   485→                )}
+   486→              </div>
+   487→              {story.shouldYouInvest && (
+   488→                <div className="rounded-lg border border-warn/20 bg-warn/5 p-2">
+   489→                  <div className="mb-1 text-[10px] font-bold uppercase text-warn">Should You Invest?</div>
+   490→                  <p className="text-xs text-foreground/80">{story.shouldYouInvest}</p>
+   491→                </div>
+   492→              )}
+   493→            </div>
+   494→          )}
+   495→        </CardContent>
+   496→      </Card>
+   497→    </div>
+   498→  );
+   499→}
+   500→
+   501→// ============================================================
+   502→// HELPER COMPONENTS
+   503→// ============================================================
+   504→function ScoreGauge({ value, rating }: { value: number; rating: string }) {
+   505→  const color = value > 65 ? '#34d399' : value > 45 ? '#fbbf24' : '#fb7185';
+   506→  const radius = 32;
+   507→  const circ = 2 * Math.PI * radius;
+   508→  const offset = circ - (value / 100) * circ;
+   509→  return (
+   510→    <div className="relative inline-flex flex-col items-center">
+   511→      <svg width="80" height="80" className="-rotate-90" style={{ filter: `drop-shadow(0 0 6px ${color}88)` }}>
+   512→        <circle cx="40" cy="40" r={radius} stroke="#1c2330" strokeWidth="6" fill="none" />
+   513→        <circle cx="40" cy="40" r={radius} stroke={color} strokeWidth="6" fill="none" strokeDasharray={circ} strokeDashoffset={offset} strokeLinecap="round" className="transition-all duration-500" />
+   514→      </svg>
+   515→      <div className="absolute flex flex-col items-center pt-1">
+   516→        <span className="text-xl font-bold" style={{ color }}>{value}</span>
+   517→        <span className="text-[8px] uppercase text-muted-foreground">{rating}</span>
+   518→      </div>
+   519→    </div>
+   520→  );
+   521→}
+   522→
+   523→function ScoreBar({ label, value }: { label: string; value: number }) {
+   524→  const color = value > 65 ? 'bg-bull' : value > 45 ? 'bg-warn' : 'bg-bear';
+   525→  return (
+   526→    <div className="flex items-center gap-2 text-xs">
+   527→      <span className="w-20 text-muted-foreground">{label}</span>
+   528→      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+   529→        <div className={cn('h-full transition-all duration-500', color)} style={{ width: `${value}%` }} />
+   530→      </div>
+   531→      <span className="w-6 text-right font-mono text-foreground">{value}</span>
+   532→    </div>
+   533→  );
+   534→}
+   535→
+   536→function Metric({ label, value, sub, good, bad }: { label: string; value: string; sub?: string; good?: boolean; bad?: boolean }) {
+   537→  return (
+   538→    <div className={cn('rounded border p-2', good ? 'border-bull/30 bg-bull/5' : bad ? 'border-bear/30 bg-bear/5' : 'border-border/40 bg-muted/20')}>
+   539→      <div className="text-[9px] uppercase text-muted-foreground">{label}</div>
+   540→      <div className={cn('font-mono text-sm font-bold', good ? 'text-bull' : bad ? 'text-bear' : 'text-foreground')}>{value}</div>
+   541→      {sub && <div className="text-[9px] text-muted-foreground">{sub}</div>}
+   542→    </div>
+   543→  );
+   544→}
+   545→

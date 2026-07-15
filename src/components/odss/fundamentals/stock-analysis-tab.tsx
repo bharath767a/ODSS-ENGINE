@@ -19,7 +19,7 @@ interface FundamentalResponse {
   currentPrice: number;
 }
 
-export function StockAnalysisTab() {
+export function StockAnalysisTab({ initialSymbol }: { initialSymbol?: string | null }) {
   const [selectedSymbol, setSelectedSymbol] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [fundamental, setFundamental] = useState<FundamentalResponse | null>(null);

@@ -1,8 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, Component, ReactNode } from 'react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import { useODSS } from '@/hooks/use-odss';
 import { MarketOverview } from '@/components/odss/dashboard/market-overview';
 import { SectorGrid } from '@/components/odss/dashboard/sector-grid';
@@ -21,6 +22,16 @@ import { ReplayValidationPanel } from '@/components/odss/replay/replay-panel';
 import { CredentialsPanel } from '@/components/odss/credentials/credentials-panel';
 import { StockAnalysisTab } from '@/components/odss/fundamentals/stock-analysis-tab';
 import { MutualFundsTab } from '@/components/odss/mutual-funds/mutual-funds-tab';
+import { MarketBriefPanel } from '@/components/odss/market-brief/market-brief-panel';
+import { HealthMonitorPanel, HealthBadge } from '@/components/odss/health/health-monitor';
+import { LearningPanel } from '@/components/odss/learning/learning-panel';
+import { StrategyLabPanel } from '@/components/odss/strategy-lab/strategy-lab-panel';
+import { StockSearch } from '@/components/odss/search/stock-search';
+import { SeasonalCalendarView } from '@/components/odss/fundamentals/seasonal-components';
+import { SwingTab } from '@/components/odss/fundamentals/swing-tab';
+import { SectorPerformancePanel } from '@/components/odss/fundamentals/sector-performance-panel';
+import { NewsAlerts } from '@/components/odss/alerts/news-alerts';
+import { NewsPopup } from '@/components/odss/alerts/news-popup';
 import {
   Activity,
   LayoutDashboard,
@@ -37,18 +48,49 @@ import {
   KeyRound,
   Building2,
   TrendingUp,
+  Calendar,
+  Brain,
+  Dna,
+  Globe2,
+  Newspaper,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Recommendation } from '@/lib/odss/types';
 
-export default function ODSSPage() {
-  return <ODSSDashboard />;
+class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean; error: string }> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: '' };
+  }
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error: error.message };
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex min-h-screen flex-col items-center justify-center bg-[#f8f4ff] p-8">
+          <Card className="max-w-md p-6 border-purple-200 bg-white">
+            <h2 className="mb-2 text-sm font-bold text-purple-700">ODSS Dashboard Error</h2>
+            <p className="mb-4 text-xs text-muted-foreground">{this.state.error}</p>
+            <Button onClick={() => window.location.reload()} size="sm">
+              Reload Dashboard
+            </Button>
+          </Card>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
-/**
- * Main dashboard component. Loads directly — no login required.
- * The ODSS is a personal decision-support tool, not a multi-user SaaS.
- */
+export default function ODSSPage() {
+  return (
+    <ErrorBoundary>
+      <ODSSDashboard />
+    </ErrorBoundary>
+  );
+}
+
 function ODSSDashboard() {
   const {
     connected,
@@ -61,10 +103,22 @@ function ODSSDashboard() {
   } = useODSS();
   const [selectedRec, setSelectedRec] = useState<Recommendation | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState('dashboard');
+  const [swingStock, setSwingStock] = useState<string | null>(null);
 
   const handleSelect = (rec: Recommendation) => {
     setSelectedRec(rec);
     setDrawerOpen(true);
+  };
+
+  const handleSwingSelect = (symbol: string) => {
+    setSwingStock(symbol);
+    setActiveTab('stocks');
+  };
+
+  const handleSearchSelect = (symbol: string) => {
+    setSwingStock(symbol);
+    setActiveTab('stocks');
   };
 
   const handleReset = async () => {
@@ -80,18 +134,17 @@ function ODSSDashboard() {
 
   return (
     <div className="flex min-h-screen flex-col">
-      {/* ============================= HEADER ============================= */}
-      <header className="sticky top-0 z-30 border-b border-border/60 bg-gradient-to-r from-bull/5 via-transparent to-ai/5 bg-[#0a0e14]/85 backdrop-blur-xl">
+      {/* HEADER */}
+      <header className="sticky top-0 z-30 border-b border-purple-100 bg-gradient-to-r from-purple-50 via-white/80 to-violet-50 bg-white/85 backdrop-blur-xl shadow-card-soft">
         <div className="mx-auto flex max-w-[1800px] items-center justify-between gap-4 px-4 py-2">
-          {/* Brand */}
           <div className="flex items-center gap-3">
-            <div className="relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-lg border border-bull/30 bg-gradient-to-br from-bull/25 via-ai/15 to-info/20 shadow-[0_0_20px_-4px_rgba(52,211,153,0.5)]">
-              <Activity className="h-4 w-4 text-bull" />
-              <div className="pointer-events-none absolute inset-0 bg-gradient-to-tr from-transparent via-white/5 to-white/10" />
+            <div className="relative flex h-9 w-9 items-center justify-center overflow-hidden rounded-lg border border-purple-200 bg-gradient-to-br from-purple-100 via-violet-100 to-purple-50 shadow-[0_4px_16px_-4px_rgba(124,58,237,0.35)]">
+              <Activity className="h-4 w-4 text-purple-600" />
+              <div className="pointer-events-none absolute inset-0 bg-gradient-to-tr from-transparent via-white/30 to-white/50" />
             </div>
             <div className="leading-tight">
               <h1 className="text-sm font-bold tracking-tight">
-                <span className="text-gradient-bull">ODSS</span>
+                <span className="text-gradient-ai">ODSS</span>
                 <span className="ml-1.5 font-normal text-muted-foreground">
                   · Options Decision Support System
                 </span>
@@ -102,7 +155,6 @@ function ODSSDashboard() {
             </div>
           </div>
 
-          {/* Center status cluster */}
           <div className="hidden items-center gap-2 lg:flex">
             <StatusChip
               icon={connected ? <Radio className="h-3 w-3" /> : <Circle className="h-3 w-3" />}
@@ -131,16 +183,17 @@ function ODSSDashboard() {
                 {new Date(lastUpdate).toLocaleTimeString('en-IN', { hour12: false })}
               </span>
             )}
+            <HealthBadge />
+            <StockSearch onSelect={handleSearchSelect} />
           </div>
 
-          {/* Actions */}
           <div className="flex items-center gap-1.5">
             <Button
               size="sm"
               variant="outline"
               onClick={manualScan}
               title="Trigger manual scan"
-              className="h-8 border-border/60 bg-card/40 font-mono text-[11px] text-muted-foreground hover:bg-card hover:text-foreground"
+              className="h-8 border-purple-200 bg-white/70 font-mono text-[11px] text-muted-foreground hover:bg-purple-50 hover:text-foreground"
             >
               <RefreshCw className="mr-1 h-3 w-3" /> SCAN
             </Button>
@@ -149,7 +202,7 @@ function ODSSDashboard() {
               variant="outline"
               onClick={handleReset}
               title="Reset simulator"
-              className="h-8 border-border/60 bg-card/40 font-mono text-[11px] text-muted-foreground hover:bg-card hover:text-foreground"
+              className="h-8 border-purple-200 bg-white/70 font-mono text-[11px] text-muted-foreground hover:bg-purple-50 hover:text-foreground"
             >
               <Zap className="mr-1 h-3 w-3" /> RESET
             </Button>
@@ -157,20 +210,21 @@ function ODSSDashboard() {
         </div>
       </header>
 
-      {/* Colorful accent bar */}
       <div className="rainbow-bar h-0.5 w-full" />
 
-      {/* ============================= TICKER TAPE ============================= */}
       <TickerTape />
 
-      {/* ============================= MAIN ============================= */}
       <main className="mx-auto w-full max-w-[1800px] flex-1 px-4 py-3">
-        <Tabs defaultValue="dashboard">
-          <TabsList className="mb-3 grid h-9 w-full grid-cols-2 border border-border/60 bg-card/40 backdrop-blur sm:grid-cols-9">
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
+          <TabsList className="mb-3 grid h-9 w-full grid-cols-2 border border-purple-100 bg-white/70 backdrop-blur sm:grid-cols-[repeat(13,minmax(0,1fr))]">
             <TerminalTabsTrigger value="dashboard" icon={<LayoutDashboard className="h-3.5 w-3.5" />} label="Dashboard" />
             <TerminalTabsTrigger value="opportunities" icon={<Trophy className="h-3.5 w-3.5" />} label="Opportunities" />
+            <TerminalTabsTrigger value="brief" icon={<Newspaper className="h-3.5 w-3.5" />} label="Market Brief" />
             <TerminalTabsTrigger value="stocks" icon={<Building2 className="h-3.5 w-3.5" />} label="Stock Analysis" />
-            <TerminalTabsTrigger value="funds" icon={<TrendingUp className="h-3.5 w-3.5" />} label="Mutual Funds" />
+            <TerminalTabsTrigger value="swing" icon={<Zap className="h-3.5 w-3.5" />} label="Swing" />
+            <TerminalTabsTrigger value="seasonal" icon={<Calendar className="h-3.5 w-3.5" />} label="Seasonal" />
+            <TerminalTabsTrigger value="learning" icon={<Brain className="h-3.5 w-3.5" />} label="Learning" />
+            <TerminalTabsTrigger value="strategylab" icon={<Dna className="h-3.5 w-3.5" />} label="Strategy Lab" />
             <TerminalTabsTrigger value="journal" icon={<BookOpen className="h-3.5 w-3.5" />} label="Journal" />
             <TerminalTabsTrigger value="analytics" icon={<BarChart3 className="h-3.5 w-3.5" />} label="Analytics" />
             <TerminalTabsTrigger value="validation" icon={<FlaskConical className="h-3.5 w-3.5" />} label="Validation" />
@@ -178,25 +232,26 @@ function ODSSDashboard() {
             <TerminalTabsTrigger value="config" icon={<Settings className="h-3.5 w-3.5" />} label="Config" />
           </TabsList>
 
-          {/* Guardrail bar — always visible */}
           <div className="mb-3">
             <GuardrailBar />
           </div>
 
-          {/* DASHBOARD TAB */}
+          {/* DASHBOARD */}
           <TabsContent value="dashboard" className="space-y-3">
+            <MarketBriefPanel />
+            <HealthMonitorPanel />
+            <LearningPanel />
             <div className="grid gap-3 lg:grid-cols-3">
-              {/* Left */}
               <div className="space-y-3">
                 <MarketOverview />
                 <SectorGrid />
+                <SectorPerformancePanel />
               </div>
-              {/* Center */}
               <div className="space-y-3">
                 <CurrentTradeCard />
                 <OpportunityTable onSelect={handleSelect} />
+                <NewsAlerts />
               </div>
-              {/* Right */}
               <div className="space-y-3">
                 <AIExplainer rec={selectedRec ?? topRecommendations[0]} />
                 <EngineVotesPanel rec={selectedRec ?? topRecommendations[0]} />
@@ -205,11 +260,12 @@ function ODSSDashboard() {
             </div>
           </TabsContent>
 
-          {/* OPPORTUNITIES TAB */}
+          {/* OPPORTUNITIES */}
           <TabsContent value="opportunities" className="space-y-3">
             <div className="grid gap-3 lg:grid-cols-3">
               <div className="lg:col-span-2">
                 <OpportunityTable onSelect={handleSelect} />
+                <NewsAlerts />
               </div>
               <div className="space-y-3">
                 <AIExplainer rec={selectedRec ?? topRecommendations[0]} />
@@ -218,27 +274,47 @@ function ODSSDashboard() {
             </div>
           </TabsContent>
 
-          {/* STOCK ANALYSIS TAB */}
+          {/* MARKET BRIEF */}
+          <TabsContent value="brief" className="space-y-3">
+            <MarketBriefPanel />
+          </TabsContent>
+
+          {/* STOCK ANALYSIS */}
           <TabsContent value="stocks" className="space-y-3">
-            <StockAnalysisTab />
+            <StockAnalysisTab initialSymbol={swingStock} />
           </TabsContent>
 
-          {/* MUTUAL FUNDS TAB */}
-          <TabsContent value="funds" className="space-y-3">
-            <MutualFundsTab />
+          {/* SWING */}
+          <TabsContent value="swing" className="space-y-3">
+            <SwingTab onSelect={handleSwingSelect} />
           </TabsContent>
 
-          {/* JOURNAL TAB */}
+          {/* SEASONAL */}
+          <TabsContent value="seasonal" className="space-y-3">
+            <SeasonalCalendarView />
+          </TabsContent>
+
+          {/* LEARNING */}
+          <TabsContent value="learning" className="space-y-3">
+            <LearningPanel />
+          </TabsContent>
+
+          {/* STRATEGY LAB */}
+          <TabsContent value="strategylab" className="space-y-3">
+            <StrategyLabPanel />
+          </TabsContent>
+
+          {/* JOURNAL */}
           <TabsContent value="journal" className="space-y-3">
             <JournalTable />
           </TabsContent>
 
-          {/* ANALYTICS TAB */}
+          {/* ANALYTICS */}
           <TabsContent value="analytics" className="space-y-3">
             <AnalyticsDashboard />
           </TabsContent>
 
-          {/* VALIDATION TAB */}
+          {/* VALIDATION */}
           <TabsContent value="validation" className="space-y-3">
             <div className="grid gap-3 lg:grid-cols-3">
               <div className="lg:col-span-2">
@@ -250,27 +326,26 @@ function ODSSDashboard() {
             </div>
           </TabsContent>
 
-          {/* DATA SOURCES / CREDENTIALS TAB */}
+          {/* DATA SOURCES */}
           <TabsContent value="credentials" className="space-y-3">
             <div className="mx-auto max-w-2xl">
               <CredentialsPanel />
             </div>
           </TabsContent>
 
-          {/* CONFIG TAB */}
+          {/* CONFIG */}
           <TabsContent value="config" className="space-y-3">
             <ConfigPanel />
           </TabsContent>
         </Tabs>
       </main>
 
-      {/* ============================= FOOTER ============================= */}
-      <footer className="mt-auto border-t border-border/60 bg-[#0a0e14]/80 backdrop-blur">
+      <footer className="mt-auto border-t border-purple-100 bg-white/80 backdrop-blur">
         <div className="mx-auto max-w-[1800px] px-4 py-2">
           <div className="flex flex-col items-center justify-between gap-1 font-mono text-[10px] tracking-wide text-muted-foreground sm:flex-row">
             <div className="flex items-center gap-2">
               <span className="text-foreground/80">ODSS DECISION ENGINE</span>
-              <span className="text-border">·</span>
+              <span className="text-purple-200">·</span>
               <span>NOT AN AUTO-TRADING BOT · HUMAN IS FINAL DECISION MAKER</span>
             </div>
             <div className="flex items-center gap-2">
@@ -281,11 +356,10 @@ function ODSSDashboard() {
       </footer>
 
       <RecommendationDrawer rec={selectedRec} open={drawerOpen} onOpenChange={setDrawerOpen} />
+      <NewsPopup />
     </div>
   );
 }
-
-/* ---------------- Small header primitives ---------------- */
 
 function StatusChip({
   icon,
@@ -299,11 +373,11 @@ function StatusChip({
   pulse?: boolean;
 }) {
   const toneMap = {
-    bull: 'border-bull/40 bg-bull/10 text-bull',
-    bear: 'border-bear/40 bg-bear/10 text-bear',
-    warn: 'border-warn/40 bg-warn/10 text-warn',
-    info: 'border-info/40 bg-info/10 text-info',
-    muted: 'border-border bg-card/40 text-muted-foreground',
+    bull: 'border-bull/30 bg-bull/10 text-bull',
+    bear: 'border-bear/30 bg-bear/10 text-bear',
+    warn: 'border-warn/30 bg-warn/10 text-warn',
+    info: 'border-info/30 bg-info/10 text-info',
+    muted: 'border-purple-200 bg-purple-50 text-muted-foreground',
   } as const;
   return (
     <span
@@ -330,7 +404,7 @@ function TerminalTabsTrigger({
   return (
     <TabsTrigger
       value={value}
-      className="gap-1.5 rounded-none border-transparent bg-transparent font-mono text-[11px] font-medium tracking-wider text-muted-foreground transition-colors data-[state=active]:bg-bull/10 data-[state=active]:text-bull data-[state=active]:shadow-[inset_0_-2px_0_0_rgba(52,211,153,0.6)]"
+      className="gap-1.5 rounded-none border-transparent bg-transparent font-mono text-[11px] font-medium tracking-wider text-muted-foreground transition-colors data-[state=active]:bg-purple-50 data-[state=active]:text-purple-700 data-[state=active]:shadow-[inset_0_-2px_0_0_rgba(124,58,237,0.6)]"
     >
       {icon}
       {label}
