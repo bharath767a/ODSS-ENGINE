@@ -1,37 +1,71 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getQuote, getAllQuotes } from '@/lib/odss/simulator/market-simulator';
+import { getDataRouter } from '@/lib/odss/data-providers/router';
+import { ALL_SYMBOLS } from '@/lib/odss/universe';
 
 export const dynamic = 'force-dynamic';
 
 // GET /api/odss/quote/[symbol] — live quote for a symbol
 // GET /api/odss/quote/all — all quotes
 //
-// Tries the REAL data provider router first (Yahoo → NSE → Angel One).
-// If all real providers fail, falls back to the simulator's synthetic quote.
+// Uses the REAL data provider router ONLY (NSE → Yahoo → Angel One).
+// If no real provider can return a quote, the API responds with a
+// "no data" error — it does NOT fall back to the simulator.
 //
-// The response includes a `source` field: 'YAHOO' | 'NSE' | 'SIMULATOR'
-// so the UI can show whether the price is real or simulated.
+// The response includes a `source` field: 'NSE' | 'YAHOO' | 'ANGEL_ONE'
+// so the UI can show which provider supplied the price.
 export async function GET(req: NextRequest, { params }: { params: Promise<{ symbol: string }> }) {
   const { symbol } = await params;
+  const router = getDataRouter();
+
+  // ---- /quote/all — bulk fetch via the router ----
   if (symbol === 'all') {
-    return NextResponse.json({ quotes: getAllQuotes() });
+    try {
+      const symbols = ALL_SYMBOLS.map((s) => s.symbol);
+      const quotesMap = await router.getAllQuotes(symbols);
+      if (quotesMap.size === 0) {
+        return NextResponse.json(
+          {
+            error: 'No live data available',
+            timestamp: Date.now(),
+            hint: 'Yahoo Finance provider may be rate-limited. Try again in a few seconds.',
+          },
+          { status: 503 },
+        );
+      }
+      const quotes = Array.from(quotesMap.values());
+      const source = router.getPreferredProvider() ?? 'REAL';
+      return NextResponse.json({ quotes, source });
+    } catch {
+      return NextResponse.json(
+        {
+          error: 'No live data available',
+          timestamp: Date.now(),
+          hint: 'Yahoo Finance provider may be rate-limited. Try again in a few seconds.',
+        },
+        { status: 503 },
+      );
+    }
   }
+
   const sym = symbol.toUpperCase();
 
-  // Try real data providers first
+  // ---- Single-symbol quote — router only, no simulator fallback ----
   try {
-    const { getDataRouter } = await import('@/lib/odss/data-providers/router');
-    const router = getDataRouter();
     const realQuote = await router.getQuote(sym);
     if (realQuote && realQuote.ltp > 0) {
       return NextResponse.json({ ...realQuote, source: router.getPreferredProvider() ?? 'REAL' });
     }
   } catch {
-    // Real providers failed — fall through to simulator
+    // fall through to the "no data" response below
   }
 
-  // Fall back to simulator
-  const q = getQuote(sym);
-  if (!q) return NextResponse.json({ error: 'Symbol not found' }, { status: 404 });
-  return NextResponse.json({ ...q, source: 'SIMULATOR' });
+  return NextResponse.json(
+    {
+      error: 'No live data available',
+      symbol: sym,
+      timestamp: Date.now(),
+      hint: 'Yahoo Finance provider may be rate-limited. Try again in a few seconds.',
+    },
+    { status: 404 },
+  );
 }

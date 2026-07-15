@@ -1,34 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getOptionChain } from '@/lib/odss/simulator/market-simulator';
+import { getDataRouter } from '@/lib/odss/data-providers/router';
 
 export const dynamic = 'force-dynamic';
 
 // GET /api/odss/optionchain/[symbol] — option chain for a symbol
 //
-// Tries the REAL NSE provider first (via the data provider router).
+// Uses the REAL NSE provider ONLY (via the data provider router).
 // If NSE is unreachable (geo-blocked, rate-limited, or no proxy
-// configured), falls back to the simulator's synthetic option chain.
+// configured), the API responds with a "no data" error — it does
+// NOT fall back to the simulator's synthetic option chain.
 //
-// The response includes a `source` field indicating whether the data
-// is REAL (from NSE) or SIMULATED (from the simulator).
+// The response includes a `source` field indicating which real
+// provider supplied the chain (typically 'NSE').
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ symbol: string }> }) {
   const { symbol } = await params;
   const sym = symbol.toUpperCase();
+  const router = getDataRouter();
 
-  // Try the real NSE provider first
   try {
-    const { getDataRouter } = await import('@/lib/odss/data-providers/router');
-    const router = getDataRouter();
     const realChain = await router.getOptionChain(sym);
     if (realChain) {
-      return NextResponse.json({ ...realChain, source: 'NSE' });
+      return NextResponse.json({ ...realChain, source: router.getPreferredProvider() ?? 'NSE' });
     }
   } catch {
-    // NSE failed — fall through to simulator
+    // fall through to the "no data" response below
   }
 
-  // Fall back to simulator
-  const chain = getOptionChain(sym);
-  if (!chain) return NextResponse.json({ error: 'Symbol not found' }, { status: 404 });
-  return NextResponse.json({ ...chain, source: 'SIMULATOR' });
+  return NextResponse.json(
+    {
+      error: 'No live option chain available',
+      symbol: sym,
+      timestamp: Date.now(),
+      hint: 'Configure NSE_PROXY_URL for real option chain data',
+    },
+    { status: 404 },
+  );
 }

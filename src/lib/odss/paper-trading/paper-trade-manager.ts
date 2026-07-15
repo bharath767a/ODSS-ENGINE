@@ -43,8 +43,9 @@ import { getSymbolMeta } from '@/lib/odss/universe';
 // Constants & defaults
 // ---------------------------------------------------------------------------
 
-const DEFAULT_STARTING_CAPITAL = 100_000; // ₹1,00,000
+const DEFAULT_STARTING_CAPITAL = 500_000; // ₹5,00,000
 const DEFAULT_LOT_SIZE = 50;
+const MAX_LOTS = 2; // maximum 2 lots per trade
 const DEFAULT_IV = 15;             // 15% — typical low-vol NIFTY environment
 const DEFAULT_DAYS_TO_EXPIRY = 7;  // weekly Thursday expiry
 const DEFAULT_RISK_FREE_RATE = 0.07; // India 10Y G-Sec
@@ -242,7 +243,7 @@ export async function openPaperTrade(
 ): Promise<OpenPaperTradeResult> {
   try {
     const lotSize = resolveLotSize(params.symbol, params.lotSize);
-    const quantity = Math.max(1, Math.floor(params.quantity ?? 1));
+    const quantity = Math.max(1, Math.min(MAX_LOTS, Math.floor(params.quantity ?? 1)));
     const totalShares = quantity * lotSize;
 
     const iv = params.iv ?? DEFAULT_IV;

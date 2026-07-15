@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStore } from '@/lib/odss/store/store';
-import { getQuote } from '@/lib/odss/simulator/market-simulator';
+import { getDataRouter } from '@/lib/odss/data-providers/router';
 import { runTechnicalEngine } from '@/lib/odss/engines/technical-engine';
 import { runOptionChainEngine } from '@/lib/odss/engines/option-chain-engine';
 import { runStrikeEngine } from '@/lib/odss/engines/strike-engine';
@@ -11,35 +11,60 @@ import { runDecisionEngine } from '@/lib/odss/engines/decision-engine';
 export const dynamic = 'force-dynamic';
 
 // GET /api/odss/recommendation/[symbol] — full recommendation for a symbol
+//
+// Fetches the live quote via the REAL data provider router ONLY
+// (NSE → Yahoo → Angel One). If the router cannot supply a quote,
+// the route responds with a 503 "no data" error. The simulator is
+// NEVER used as a fallback.
 export async function GET(req: NextRequest, { params }: { params: Promise<{ symbol: string }> }) {
   const { symbol } = await params;
+  const sym = symbol.toUpperCase();
   const store = getStore();
+
   // Check if we have a cached recommendation
-  const cached = store.recommendations.get(symbol.toUpperCase());
+  const cached = store.recommendations.get(sym);
   if (cached) return NextResponse.json(cached);
 
   // Otherwise build one on the fly
   const market = store.market;
   if (!market) return NextResponse.json({ error: 'Market data not ready' }, { status: 503 });
 
+  // ---- Fetch the live quote via the REAL router ONLY ----
+  let q;
+  try {
+    const router = getDataRouter();
+    q = await router.getQuote(sym);
+  } catch {
+    q = null;
+  }
+  if (!q || q.ltp <= 0) {
+    return NextResponse.json(
+      {
+        error: 'No live data available for recommendation',
+        symbol: sym,
+        timestamp: Date.now(),
+        hint: 'Yahoo Finance provider may be rate-limited. Try again in a few seconds.',
+      },
+      { status: 503 },
+    );
+  }
+
   const sectorMap = store.sectors ? new Map(store.sectors.sectors.map((s) => [s.sector, s])) : new Map();
   const rsMap = store.rs ? new Map(store.rs.rows.map((r) => [r.symbol, r])) : new Map();
-  const q = getQuote(symbol.toUpperCase());
-  if (!q) return NextResponse.json({ error: 'Symbol not found' }, { status: 404 });
 
-  const technical = runTechnicalEngine(symbol.toUpperCase());
-  const optionChain = runOptionChainEngine(symbol.toUpperCase());
+  const technical = runTechnicalEngine(sym);
+  const optionChain = runOptionChainEngine(sym);
   const sector = sectorMap.get(q.sector ?? '');
-  const rsRow = rsMap.get(symbol.toUpperCase());
+  const rsRow = rsMap.get(sym);
 
   // Determine direction
   const isLong = technical.trend === 'BULLISH' || (sector && sector.strength > 0);
   const direction = isLong ? 'CE' : 'PE';
   const conviction = 50;
 
-  const strike = runStrikeEngine(symbol.toUpperCase(), direction, technical, optionChain, conviction);
-  const entry = runEntryEngine(symbol.toUpperCase(), direction, technical);
-  const risk = runRiskEngine(symbol.toUpperCase(), direction, entry, technical);
+  const strike = runStrikeEngine(sym, direction, technical, optionChain, conviction);
+  const entry = runEntryEngine(sym, direction, technical);
+  const risk = runRiskEngine(sym, direction, entry, technical);
   const decision = runDecisionEngine({
     direction,
     market,
@@ -51,7 +76,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ symb
   });
 
   return NextResponse.json({
-    symbol: symbol.toUpperCase(),
+    symbol: sym,
     sector: q.sector,
     direction,
     market,
@@ -60,7 +85,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ symb
     technical,
     optionChain,
     opportunity: {
-      symbol: symbol.toUpperCase(),
+      symbol: sym,
       sector: q.sector,
       direction,
       marketScore: 50,

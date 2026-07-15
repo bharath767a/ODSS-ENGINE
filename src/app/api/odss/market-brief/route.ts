@@ -1,13 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  getQuote,
-  getAllQuotes,
-  getIndiaVix,
-  getMarketBreadth,
-  getRegime,
-} from '@/lib/odss/simulator/market-simulator';
+import { getDataRouter } from '@/lib/odss/data-providers/router';
 import { getStore } from '@/lib/odss/store/store';
-import { getSymbolMeta } from '@/lib/odss/universe';
+import { getSymbolMeta, STOCKS } from '@/lib/odss/universe';
+import type { Quote } from '@/lib/odss/types';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -17,18 +12,23 @@ export const revalidate = 0;
 // ============================================================
 // Returns a structured market brief:
 //   - Index prices + change %
-//   - Market breadth
+//   - Market breadth (derived from REAL Yahoo stock quotes)
 //   - AI summary + prediction (templated from engine outputs)
 //   - Key risks + opportunities (derived from market state)
-//   - FII/DII summary (simulated based on market regime)
-//   - Top gainers/losers
+//   - FII/DII summary (derived from market regime + breadth)
+//   - Top gainers/losers (from REAL Yahoo quotes)
 //   - News items (derived from price action + market events)
-//   - Sector performance
+//   - Sector performance (from REAL Yahoo quotes)
 //
 // The "type" param shifts emphasis:
 //   - pre: opening setup, overnight cues, pre-market risks
 //   - intraday: live breadth, momentum, intraday levels
 //   - post: closing summary, key learnings, next-day setup
+//
+// IMPORTANT: This route uses the REAL data provider router ONLY.
+// If the router cannot supply NIFTY or BANKNIFTY quotes, the
+// route responds with a 503 "no data" error. The simulator is
+// NEVER used as a fallback.
 // ============================================================
 
 export type Sentiment = 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
@@ -419,6 +419,34 @@ function buildOpportunities(ctx: {
   return opps;
 }
 
+// Derive a market regime label from the real NIFTY change %.
+// (Replaces the simulator's getRegime() — no synthetic data.)
+function deriveRegime(niftyPct: number): string {
+  if (niftyPct <= -1.5) return 'SELLOFF';
+  if (niftyPct <= -0.5) return 'TRENDING_DOWN';
+  if (niftyPct >= 0.5) return 'TRENDING_UP';
+  if (Math.abs(niftyPct) <= 0.15) return 'RANGING';
+  return 'CHOPPY';
+}
+
+// Compute market breadth from REAL Yahoo quotes — count stocks
+// whose changePct is up vs down. (Replaces the simulator's
+// getMarketBreadth() — no synthetic data.)
+function computeBreadthFromQuotes(quotes: Quote[]): {
+  advanceCount: number;
+  declineCount: number;
+  advanceDeclineRatio: number;
+} {
+  let advances = 0;
+  let declines = 0;
+  for (const q of quotes) {
+    if (q.changePct > 0) advances += 1;
+    else if (q.changePct < 0) declines += 1;
+  }
+  const ratio = declines > 0 ? advances / declines : advances > 0 ? 2 : 1;
+  return { advanceCount: advances, declineCount: declines, advanceDeclineRatio: ratio };
+}
+
 // ============================================================
 // Route handler
 // ============================================================
@@ -431,78 +459,80 @@ export async function GET(req: NextRequest) {
     : 'pre';
 
   try {
-    // ---- Quotes: fetch REAL data from Yahoo Finance ----
-    // The Next.js process has its OWN simulator instance (separate from
-    // the mini-service), so getQuote() returns synthetic prices here.
-    // We MUST fetch from the real Yahoo provider to get actual market prices.
-    let nifty: any = null;
-    let bankNifty: any = null;
-    let finNifty: any = null;
+    const router = getDataRouter();
+
+    // ---- Fetch REAL index quotes + VIX from the router (ONLY) ----
+    let nifty: Quote | null = null;
+    let bankNifty: Quote | null = null;
+    let finNifty: Quote | null = null;
     let vix = 0;
-    let priceSource = 'SIMULATOR';
+    let priceSource = 'REAL';
 
     try {
-      const { getDataRouter } = await import('@/lib/odss/data-providers/router');
-      const router = getDataRouter();
       [nifty, bankNifty, finNifty] = await Promise.all([
         router.getQuote('NIFTY'),
         router.getQuote('BANKNIFTY'),
         router.getQuote('FINNIFTY'),
       ]);
       vix = await router.getIndiaVIX();
-      if (nifty?.ltp > 0) priceSource = router.getPreferredProvider() ?? 'YAHOO';
+      if (nifty?.ltp) priceSource = router.getPreferredProvider() ?? 'YAHOO';
     } catch {
-      // Fall back to simulator if Yahoo fails
+      // fall through to the "no data" check below
     }
 
-    // Fall back to simulator if real data unavailable
-    if (!nifty?.ltp) nifty = getQuote('NIFTY');
-    if (!bankNifty?.ltp) bankNifty = getQuote('BANKNIFTY');
-    if (vix <= 0) vix = getIndiaVix();
+    // NIFTY and BANKNIFTY are mandatory — if either is missing, return 503.
+    if (!nifty?.ltp || !bankNifty?.ltp) {
+      return NextResponse.json(
+        {
+          error: 'No live market data available',
+          timestamp: Date.now(),
+          hint: 'Yahoo Finance provider may be rate-limited. Try again in a few seconds.',
+        },
+        { status: 503 },
+      );
+    }
 
-    const breadth = getMarketBreadth();
-    const regime = getRegime();
+    // ---- Fetch REAL stock quotes for breadth / gainers / losers / sectors ----
+    const stockSymbols = STOCKS.map((s) => s.symbol);
+    let stockQuotes: Quote[] = [];
+    try {
+      const quotesMap = await router.getAllQuotes(stockSymbols);
+      stockQuotes = Array.from(quotesMap.values()).filter((q) => q && q.ltp > 0);
+    } catch {
+      // No stock quotes available — breadth/gainers/sectors will be empty
+    }
+
+    // ---- Breadth (derived from REAL Yahoo stock quotes) ----
+    const breadth = computeBreadthFromQuotes(stockQuotes);
+
+    // ---- Regime (derived from REAL NIFTY change %) ----
+    const regime = deriveRegime(nifty.changePct);
+
+    // ---- Store-backed engine outputs (market state, bias, trend) ----
+    // These come from the ODSS mini-service via WebSocket, not from the
+    // simulator directly in this route. May be null if the mini-service
+    // hasn't started — the ?? defaults handle that.
     const store = getStore();
     const market = store.market;
 
-    const niftyClose = nifty?.ltp ?? 0;
-    const niftyChange = nifty ? nifty.ltp - nifty.prevClose : 0;
-    const niftyChangePct = nifty?.changePct ?? 0;
-    const bankNiftyClose = bankNifty?.ltp ?? 0;
-    const bankNiftyChange = bankNifty ? bankNifty.ltp - bankNifty.prevClose : 0;
-    const bankNiftyChangePct = bankNifty?.changePct ?? 0;
+    const niftyClose = nifty.ltp;
+    const niftyChange = nifty.ltp - nifty.prevClose;
+    const niftyChangePct = nifty.changePct;
+    const bankNiftyClose = bankNifty.ltp;
+    const bankNiftyChange = bankNifty.ltp - bankNifty.prevClose;
+    const bankNiftyChangePct = bankNifty.changePct;
 
-    // Sensex ≈ NIFTY × ~13.5 (approximate; BSE Sensex not directly simulated)
+    // Sensex ≈ NIFTY × ~13.5 (approximate; BSE Sensex not directly fetched)
     const sensexClose = niftyClose * 13.52;
     const sensexChange = niftyChange * 13.52;
     const sensexChangePct = niftyChangePct;
 
     const vixChange = vix - 14.5; // baseline ~14.5 reference
 
-    // ---- Gainers / Losers (also from real data) ----
-    let allQuotes = getAllQuotes();
-    // Try to enrich with real Yahoo prices for top stocks
-    try {
-      const { getDataRouter } = await import('@/lib/odss/data-providers/router');
-      const router = getDataRouter();
-      const stockSymbols = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 'SBIN', 'BHARTIARTL', 'ITC', 'LT', 'HINDUNILVR'];
-      const realQuotes = await Promise.allSettled(
-        stockSymbols.map(s => router.getQuote(s))
-      );
-      // Build a map of real quotes
-      const realMap = new Map<string, any>();
-      realQuotes.forEach((r, i) => {
-        if (r.status === 'fulfilled' && r.value?.ltp > 0) {
-          realMap.set(stockSymbols[i], r.value);
-        }
-      });
-      // Replace simulator quotes with real ones where available
-      allQuotes = allQuotes.map(q => realMap.get(q.symbol) ?? q);
-    } catch {
-      // keep simulator quotes
-    }
-    const sorted = [...allQuotes].sort((a, b) => b.changePct - a.changePct);
+    // ---- Gainers / Losers (from REAL Yahoo quotes) ----
+    const sorted = [...stockQuotes].sort((a, b) => b.changePct - a.changePct);
     const topGainers: GainerLoserItem[] = sorted
+      .filter((q) => q.changePct > 0)
       .slice(0, 5)
       .map((q) => ({
         symbol: q.symbol,
@@ -512,6 +542,7 @@ export async function GET(req: NextRequest) {
         changePct: q.changePct,
       }));
     const topLosers: GainerLoserItem[] = sorted
+      .filter((q) => q.changePct < 0)
       .slice(-5)
       .reverse()
       .map((q) => ({
@@ -522,7 +553,7 @@ export async function GET(req: NextRequest) {
         changePct: q.changePct,
       }));
 
-    // ---- Sector performance ----
+    // ---- Sector performance (from REAL Yahoo quotes) ----
     const sectorMap = new Map<
       string,
       {
@@ -534,7 +565,7 @@ export async function GET(req: NextRequest) {
         laggard?: GainerLoserItem;
       }
     >();
-    for (const q of allQuotes) {
+    for (const q of stockQuotes) {
       if (!q.sector || q.sector === 'INDEX') continue;
       const cur = sectorMap.get(q.sector) ?? { changePctSum: 0, count: 0, advances: 0, declines: 0 };
       cur.changePctSum += q.changePct;

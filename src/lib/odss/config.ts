@@ -51,7 +51,7 @@ export const DEFAULT_CONFIG: ODSSConfig = {
   weightOptionChain: 0.25,
   weightRisk: 0.15,
   riskPerTradePct: 1.0,
-  capital: 200000,
+  capital: 500000,
   lotSize: 75,
   minRR: 2.0,
   minConfidenceEnter: 65,

@@ -1,15 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getFundamentalProvider } from '@/lib/odss/fundamentals/provider';
 import { analyzeFundamentals, getBuySellHold } from '@/lib/odss/fundamentals/analyzer';
-import { getQuote } from '@/lib/odss/simulator/market-simulator';
+import { getDataRouter } from '@/lib/odss/data-providers/router';
 
 export const dynamic = 'force-dynamic';
 
 // GET /api/odss/fundamentals/[symbol] — complete fundamental analysis
 //
-// Fetches the REAL market price via the data provider router (Yahoo → NSE).
-// Falls back to the simulator price only if all real providers fail.
-// This ensures the Stock Analysis tab shows REAL market prices.
+// Fundamental data (P/E, EPS, debt, quarterly results, etc.) always
+// comes from the fundamentals provider — this is curated static data,
+// not live market data.
+//
+// The live market price is fetched via the data provider router ONLY
+// (NSE → Yahoo → Angel One). If the router cannot supply a price,
+// the response still includes the fundamental data, but the price
+// fields are flagged as unavailable:
+//   - `priceSource: 'NONE'`
+//   - `currentPrice: 0`
+//   - `priceError: 'No live price available'`
+//
+// The simulator is NEVER used as a fallback.
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ symbol: string }> }) {
   const { symbol } = await params;
   const sym = symbol.toUpperCase();
@@ -22,29 +32,23 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ sym
 
   const score = analyzeFundamentals(data);
 
-  // Try real data providers first for the price
+  // Try real data providers ONLY for the price (no simulator fallback)
   let currentPrice = 0;
-  let priceSource = 'SIMULATOR';
+  let priceSource: 'NSE' | 'YAHOO' | 'ANGEL_ONE' | 'REAL' | 'NONE' = 'NONE';
   let priceChangePct = 0;
+  let priceError: string | undefined;
   try {
-    const { getDataRouter } = await import('@/lib/odss/data-providers/router');
     const router = getDataRouter();
     const realQuote = await router.getQuote(sym);
     if (realQuote && realQuote.ltp > 0) {
       currentPrice = realQuote.ltp;
       priceChangePct = realQuote.changePct;
       priceSource = router.getPreferredProvider() ?? 'REAL';
+    } else {
+      priceError = 'No live price available';
     }
   } catch {
-    // Real providers failed
-  }
-
-  // Fall back to simulator if real providers didn't work
-  if (currentPrice === 0) {
-    const quote = getQuote(sym);
-    currentPrice = quote?.ltp ?? data.profile.marketCap / 10000;
-    priceChangePct = quote?.changePct ?? 0;
-    priceSource = quote ? 'SIMULATOR' : 'ESTIMATED';
+    priceError = 'No live price available';
   }
 
   const recommendation = getBuySellHold(data, score, currentPrice);
@@ -55,6 +59,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ sym
     recommendation,
     currentPrice,
     priceSource,
+    priceError,
     priceChangePct,
     timestamp: Date.now(),
   });
