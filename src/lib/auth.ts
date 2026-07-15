@@ -46,6 +46,15 @@ export const authOptions: NextAuthOptions = {
     // and stored client-side, so it survives server restarts.
     maxAge: 60 * 60 * 24 * 30, // 30 days
   },
+  // Trust the Host header from the Caddy reverse proxy.
+  // Without this, NextAuth's CSRF protection rejects login requests
+  // that come through the gateway (port 81) because the Origin header
+  // doesn't match the internal localhost:3000. This is the root cause
+  // of the persistent "login page keeps appearing" issue.
+  trustHost: true,
+  // Use secure cookies only in production HTTPS. The preview panel
+  // uses HTTP, so we must not set Secure=true or cookies won't persist.
+  useSecureCookies: process.env.NODE_ENV === 'production' && process.env.NEXTAUTH_URL?.startsWith('https'),
   pages: {
     // We don't ship a dedicated /auth/signin page — login is an overlay on /.
     // Keep this so any internal redirects stay on /.
