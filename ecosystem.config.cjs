@@ -40,8 +40,9 @@ module.exports = {
       error_file: '/home/z/my-project/.zscripts/pm2-odss-web-error.log',
       merge_logs: true,
       time: true,
-      kill_timeout: 5000,
+      kill_timeout: 10000,
       listen_timeout: 30000,
+      treekill: true,
     },
     {
       name: 'odss-market',
@@ -62,8 +63,9 @@ module.exports = {
       error_file: '/home/z/my-project/.zscripts/pm2-odss-market-error.log',
       merge_logs: true,
       time: true,
-      kill_timeout: 5000,
+      kill_timeout: 10000,
       listen_timeout: 10000,
+      treekill: true,
     },
   ],
 };
