@@ -50,6 +50,16 @@ interface SymbolState {
   drift: number; // per-tick drift
   vol: number; // per-tick volatility
   sectorBias: number; // -1..1, sector influence
+  /**
+   * When true, this symbol's price is driven by REAL market data (Yahoo/NSE).
+   * The tick() function will NOT apply synthetic noise to this symbol —
+   * its price stays at the last injected real value until the next
+   * injection updates it. This prevents the dashboard from showing
+   * a mix of real + synthetic prices.
+   */
+  realDataActive: boolean;
+  /** Timestamp of the last real data injection (epoch ms). */
+  lastRealUpdate: number;
 }
 
 interface SimulatorState {
@@ -127,6 +137,8 @@ function initSimulator(seed: number): SimulatorState {
       drift: 0,
       vol: 0,
       sectorBias: meta.type === 'STOCK' ? sectorBias.get(meta.sector) ?? 0 : 0,
+      realDataActive: false,
+      lastRealUpdate: 0,
     });
   }
 
@@ -181,9 +193,35 @@ export function tick(): number {
   maybeRotateRegime(s);
   const p = regimeParams(s.regime);
   const now = Date.now();
-  s.indiaVix = Math.max(8, Math.min(40, s.indiaVix + s.vixDrift + gaussian(s.rng) * 0.05));
+
+  // Only apply synthetic VIX drift if no real VIX has been injected recently
+  // (within 30 seconds). This prevents the synthetic VIX from overwriting
+  // the real Yahoo VIX between injections.
+  const realVixActive = (s as any)._lastRealVixUpdate && (now - (s as any)._lastRealVixUpdate < 30000);
+  if (!realVixActive) {
+    s.indiaVix = Math.max(8, Math.min(40, s.indiaVix + s.vixDrift + gaussian(s.rng) * 0.05));
+  }
 
   for (const sym of s.symbols.values()) {
+    // SKIP symbols with real data — their price is driven by Yahoo/NSE,
+    // not synthetic noise. This prevents the dashboard from showing
+    // a mix of real + synthetic prices.
+    if (sym.realDataActive && (now - sym.lastRealUpdate < 30000)) {
+      // Real data is fresh (< 30s old) — just add a candle with the real price
+      // so technical indicators have continuous data, but DON'T change the price.
+      sym.candles.push({
+        timestamp: now,
+        open: sym.price,
+        high: sym.price,
+        low: sym.price,
+        close: sym.price,
+        volume: sym.cumulativeVol,
+      });
+      if (sym.candles.length > 300) sym.candles.shift();
+      continue;
+    }
+
+    // Real data is stale or not active — apply synthetic price movement
     const beta = sym.meta.beta;
     // Combine regime drift + sector bias + idiosyncratic noise
     const drift = (p.drift + sym.sectorBias * 0.0001) * beta;
@@ -276,6 +314,11 @@ export function injectRealQuote(
   const sym = s.symbols.get(symbol);
   if (!sym) return;
 
+  // Mark this symbol as having real data — tick() will NOT apply
+  // synthetic noise to it as long as the data is fresh (< 30s old).
+  sym.realDataActive = true;
+  sym.lastRealUpdate = Date.now();
+
   // Overwrite the current price with the real price
   sym.price = realQuote.ltp;
   sym.prevClose = realQuote.prevClose;
@@ -300,6 +343,7 @@ export function injectRealQuote(
   // Overwrite VIX if provided
   if (realVix !== undefined && realVix > 0 && realVix < 200) {
     s.indiaVix = realVix;
+    (s as any)._lastRealVixUpdate = Date.now();
   }
 }
 
@@ -310,6 +354,7 @@ export function injectRealVix(realVix: number): void {
   const s = getSimulator();
   if (realVix > 0 && realVix < 200) {
     s.indiaVix = realVix;
+    (s as any)._lastRealVixUpdate = Date.now();
   }
 }
 

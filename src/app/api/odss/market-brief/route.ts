@@ -431,10 +431,35 @@ export async function GET(req: NextRequest) {
     : 'pre';
 
   try {
-    // ---- Quotes (real data injected into simulator by mini-service) ----
-    const nifty = getQuote('NIFTY');
-    const bankNifty = getQuote('BANKNIFTY');
-    const vix = getIndiaVix();
+    // ---- Quotes: fetch REAL data from Yahoo Finance ----
+    // The Next.js process has its OWN simulator instance (separate from
+    // the mini-service), so getQuote() returns synthetic prices here.
+    // We MUST fetch from the real Yahoo provider to get actual market prices.
+    let nifty: any = null;
+    let bankNifty: any = null;
+    let finNifty: any = null;
+    let vix = 0;
+    let priceSource = 'SIMULATOR';
+
+    try {
+      const { getDataRouter } = await import('@/lib/odss/data-providers/router');
+      const router = getDataRouter();
+      [nifty, bankNifty, finNifty] = await Promise.all([
+        router.getQuote('NIFTY'),
+        router.getQuote('BANKNIFTY'),
+        router.getQuote('FINNIFTY'),
+      ]);
+      vix = await router.getIndiaVIX();
+      if (nifty?.ltp > 0) priceSource = router.getPreferredProvider() ?? 'YAHOO';
+    } catch {
+      // Fall back to simulator if Yahoo fails
+    }
+
+    // Fall back to simulator if real data unavailable
+    if (!nifty?.ltp) nifty = getQuote('NIFTY');
+    if (!bankNifty?.ltp) bankNifty = getQuote('BANKNIFTY');
+    if (vix <= 0) vix = getIndiaVix();
+
     const breadth = getMarketBreadth();
     const regime = getRegime();
     const store = getStore();
@@ -454,8 +479,28 @@ export async function GET(req: NextRequest) {
 
     const vixChange = vix - 14.5; // baseline ~14.5 reference
 
-    // ---- Gainers / Losers ----
-    const allQuotes = getAllQuotes();
+    // ---- Gainers / Losers (also from real data) ----
+    let allQuotes = getAllQuotes();
+    // Try to enrich with real Yahoo prices for top stocks
+    try {
+      const { getDataRouter } = await import('@/lib/odss/data-providers/router');
+      const router = getDataRouter();
+      const stockSymbols = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK', 'SBIN', 'BHARTIARTL', 'ITC', 'LT', 'HINDUNILVR'];
+      const realQuotes = await Promise.allSettled(
+        stockSymbols.map(s => router.getQuote(s))
+      );
+      // Build a map of real quotes
+      const realMap = new Map<string, any>();
+      realQuotes.forEach((r, i) => {
+        if (r.status === 'fulfilled' && r.value?.ltp > 0) {
+          realMap.set(stockSymbols[i], r.value);
+        }
+      });
+      // Replace simulator quotes with real ones where available
+      allQuotes = allQuotes.map(q => realMap.get(q.symbol) ?? q);
+    } catch {
+      // keep simulator quotes
+    }
     const sorted = [...allQuotes].sort((a, b) => b.changePct - a.changePct);
     const topGainers: GainerLoserItem[] = sorted
       .slice(0, 5)
@@ -595,7 +640,7 @@ export async function GET(req: NextRequest) {
       sectors: topSectors,
     });
 
-    const source = nifty ? 'SIMULATOR+REAL' : 'SIMULATOR';
+    const source = priceSource;
 
     const response: MarketBriefResponse = {
       type,
