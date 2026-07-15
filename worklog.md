@@ -261,3 +261,102 @@ Stage Summary:
 - Option chains remain simulated until NSE_PROXY_URL is configured
 - The Swing tab crash is a browser cache issue — user needs to hard-refresh
 - The recurring revert issue: automated git processes are reverting uncommitted work. Future sessions should commit changes immediately.
+
+---
+Task ID: PERMANENT-FIX
+Agent: main
+Task: Root cause analysis + permanent fix for recurring design reverts + login page issue
+
+Root Cause Analysis:
+====================
+1. NO PROCESS MANAGER: The dev server and mini-service were started as orphaned
+   background processes (`bun run dev &` + `disown`). When they crashed or the
+   container restarted, NOTHING restarted them. The mini-service was frequently
+   dead (port 3002 not listening).
+
+2. DESTRUCTIVE STARTUP SCRIPT: `.zscripts/dev.sh` ran `bun run db:push` on EVERY
+   container startup. While Prisma db:push is non-destructive for schema changes,
+   it can potentially reset data in certain scenarios, causing session loss.
+
+3. SHORT SESSION EXPIRY: NextAuth JWT expired after 7 days. Combined with
+   container restarts, users were frequently forced to re-login.
+
+4. NO GIT PERSISTENCE: Previous session's work (Macro engine, Swing tab) was
+   written to disk but lost during container restart because it wasn't committed
+   before the restart happened. The automated snapshot system only captures
+   what's on disk at snapshot time.
+
+5. AUTOMATED GIT COMMITS: An external system periodically commits the working
+   tree with UUID messages (e.g., "641adc1e-db69-4f5b-bf1f-5fe58402cb9a").
+   These commits are snapshots, not human commits.
+
+Permanent Fixes Implemented:
+============================
+1. INSTALLED PM2 PROCESS MANAGER (npm install -g pm2)
+   - Auto-restarts processes on crash (max 10 restarts, 3s delay)
+   - Survives container restarts via `pm2 resurrect`
+   - Memory limits (auto-restart on memory leak: 700M web, 300M market)
+   - Log management (separate out/error logs in .zscripts/)
+   - treekill: true (kills entire process tree, prevents orphaned children)
+
+2. CREATED ECOSYSTEM CONFIG (ecosystem.config.cjs)
+   - odss-web: Next.js dev server (port 3000, fork mode)
+   - odss-market: Market data mini-service (port 3002, fork mode)
+   - Both use bun as interpreter with --hot flag
+   - Properly configured paths (/usr/local/bin/bun)
+
+3. MODIFIED .zscripts/dev.sh TO USE PM2
+   - Replaced `bun run dev &` + `disown` with `pm2 start ecosystem.config.cjs`
+   - Kills orphaned processes before starting
+   - Saves pm2 state for resurrection
+   - Falls back to legacy mode if ecosystem.config.cjs doesn't exist
+   - Skips `start_mini_services` when pm2 manages them
+
+4. EXTENDED NEXTAUTH SESSION from 7 days to 30 days
+   - JWT is stored client-side, survives server restarts
+   - Users don't need to re-login after container restarts
+
+5. CREATED start-odss.sh STARTUP SCRIPT
+   - Idempotent (safe to run multiple times)
+   - Installs pm2 if not present
+   - Kills orphaned processes
+   - Starts/restarts via pm2
+   - Waits for services to be ready
+   - Shows status and helpful commands
+
+6. COMMITTED ALL WORK TO GIT
+   - 3 commits made to ensure persistence:
+     a. "PERMANENT FIX: PM2 process manager + 30-day session + real Yahoo data injection"
+     b. "Fix .zscripts/dev.sh to use PM2 instead of orphaned processes"
+     c. "Enable treekill in pm2 config for clean process tree shutdown"
+   - All changes are now in the git history and will survive container restarts
+
+Verification:
+============
+- PM2 processes: both online, 0 restarts, stable for 2+ minutes
+- Web server: http://localhost:3000 returns 200
+- Mini-service: port 3002 listening
+- Real data: NIFTY 24052.05 (source: YAHOO), RELIANCE 1293 (source: YAHOO)
+- Crash recovery tested: killed web server, pm2 auto-restarted it within 5 seconds
+- Git: all work committed, clean working tree
+
+PM2 Commands Reference:
+======================
+  pm2 list              - show process status
+  pm2 logs              - tail all logs
+  pm2 logs odss-web     - tail web server logs
+  pm2 logs odss-market  - tail mini-service logs
+  pm2 restart all       - restart everything
+  pm2 stop all          - stop everything
+  pm2 monit             - live monitoring
+  pm2 save              - save current process list
+  pm2 resurrect         - restore saved process list (auto-runs on container boot)
+
+Stage Summary:
+==============
+- Root cause identified: no process manager + short session expiry + uncommitted work
+- Permanent fix implemented: PM2 manages both processes with auto-restart
+- Session extended to 30 days
+- All work committed to git
+- Startup script modified to use PM2 instead of orphaned processes
+- This should permanently resolve the recurring design revert + login page issue
