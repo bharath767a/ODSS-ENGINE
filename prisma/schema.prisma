@@ -411,3 +411,152 @@ model ValidationReport {
   worstDecision    String? // description of worst decision
   @@index([sessionId])
 }
+
+// ============================================================
+// PAPER TRADING ENGINE
+// ============================================================
+// Simulated options trades with realistic fills, transaction costs,
+// and P&L tracking. Used for strategy validation without real money.
+// ============================================================
+
+model PaperTrade {
+  id              String   @id @default(cuid())
+  // Identification
+  symbol          String   // NIFTY, BANKNIFTY, RELIANCE, etc.
+  direction       String   // "CE" | "PE"
+  strategy        String   // "LONG_CALL" | "LONG_PUT" | "BULL_PUT_SPREAD" | etc.
+  variantGroup    String?  // group ID for multi-strategy spawner
+  variantId       String?  // specific variant ID within group
+  // Entry
+  entryStrike     Float
+  entryPrice      Float    // premium paid/received
+  entryTime       DateTime @default(now())
+  entryUnderlying Float    // underlying price at entry
+  entryType       String   @default("MARKET") // MARKET, LIMIT, BREAKOUT, etc.
+  quantity        Int      @default(1) // number of lots
+  lotSize         Int      @default(50)
+  // Exit
+  exitPrice       Float?
+  exitTime        DateTime?
+  exitUnderlying  Float?
+  exitReason      String?  // "TP1", "SL", "TIME", "MANUAL", "EXIT_ENGINE"
+  // P&L
+  grossPnl        Float    @default(0) // premium difference
+  totalCosts      Float    @default(0) // brokerage + STT + exchange + GST
+  netPnl          Float    @default(0) // grossPnl - totalCosts
+  rMultiple       Float    @default(0) // R-multiple based on initial risk
+  // Context at entry
+  marketState     String?  // TRENDING_UP, RANGING, etc.
+  vixAtEntry      Float?
+  sectorAtEntry   String?
+  regimeAtEntry   String?  // data regime: REAL, SIMULATOR, etc.
+  // Status
+  status          String   @default("OPEN") // OPEN, CLOSED
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([symbol])
+  @@index([status])
+  @@index([variantGroup])
+  @@index([strategy])
+}
+
+model PaperFund {
+  id              String   @id @default(cuid())
+  // Single-row table (enforced at app level)
+  startingCapital Float    @default(100000) // ₹1,00,000
+  currentBalance  Float    @default(100000)
+  realizedPnl     Float    @default(0)
+  openPositions   Int      @default(0)
+  totalTrades     Int      @default(0)
+  winningTrades   Int      @default(0)
+  losingTrades    Int      @default(0)
+  maxDrawdown     Float    @default(0)
+  peakBalance     Float    @default(100000)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ============================================================
+// LEARNING ENGINE — Pattern recognition from completed trades
+// ============================================================
+
+model LearningPattern {
+  id              String   @id @default(cuid())
+  // Pattern key: (symbol, direction, marketState, trend, sector, vixBand, regime)
+  symbol          String
+  direction       String   // CE | PE
+  marketState     String?
+  technicalTrend   String?
+  sector          String?
+  vixBand         String?  // LOW | NORMAL | HIGH | EXTREME
+  dataRegime      String   @default("REAL") // REAL | SIMULATOR
+  // Statistics
+  rawN            Int      @default(0) // raw trade count
+  effectiveN      Float   @default(0) // discounted for correlated trades
+  wins            Int      @default(0)
+  losses          Int      @default(0)
+  avgR            Float   @default(0) // avg R-multiple
+  totalPnl        Float   @default(0)
+  // Reliability
+  tier            String   @default("INSUFFICIENT") // INSUFFICIENT | PRELIMINARY | RELIABLE
+  winRatePct      Float   @default(0)
+  ciLower         Float   @default(0) // Wilson 80% CI lower bound
+  ciUpper         Float   @default(0) // Wilson 80% CI upper bound
+  // Metadata
+  lastSeenAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([symbol, direction, marketState, technicalTrend, sector, vixBand, dataRegime])
+  @@index([dataRegime])
+  @@index([tier])
+}
+
+// ============================================================
+// STRATEGY LAB — Genetic algorithm for strategy evolution
+// ============================================================
+
+model StrategyVariant {
+  id              String   @id @default(cuid())
+  name            String   @unique // e.g. "BullCallSpread-v1"
+  genome          String   // JSON: {strategy, entryRules, exitRules, riskRules, positionSizing}
+  // Statistics
+  rawN            Int      @default(0)
+  effectiveN      Float   @default(0)
+  wins            Int      @default(0)
+  losses          Int      @default(0)
+  profitFactor    Float   @default(0)
+  avgR            Float   @default(0)
+  totalPnl        Float   @default(0)
+  // Fitness (genetic algorithm score)
+  fitness         Float   @default(0)
+  // Reliability
+  tier            String   @default("INSUFFICIENT")
+  winRatePct      Float   @default(0)
+  // Status
+  status          String   @default("CANDIDATE") // CANDIDATE | ACTIVE | RETIRED | GRAVEYARD
+  generation      Int      @default(0)
+  parentName      String?  // parent variant name (for evolution tracking)
+  dataRegime      String   @default("REAL")
+  // Metadata
+  lastSeenAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status])
+  @@index([tier])
+  @@index([dataRegime])
+}
+
+model EvolutionLog {
+  id              String   @id @default(cuid())
+  generation      Int
+  action          String   // CREATE | PROMOTE | RETIRE | PRUNE | MUTATE | CROSSOVER
+  variantName     String
+  details         String?  // JSON: {reason, oldStatus, newStatus, fitnessDelta, ...}
+  timestamp       DateTime @default(now())
+
+  @@index([generation])
+  @@index([variantName])
+}

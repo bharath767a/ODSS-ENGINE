@@ -26,6 +26,7 @@ import { MarketBriefPanel } from '@/components/odss/market-brief/market-brief-pa
 import { HealthMonitorPanel, HealthBadge } from '@/components/odss/health/health-monitor';
 import { LearningPanel } from '@/components/odss/learning/learning-panel';
 import { StrategyLabPanel } from '@/components/odss/strategy-lab/strategy-lab-panel';
+import { PaperTradingPanel } from '@/components/odss/paper-trading/paper-trading-panel';
 import { StockSearch } from '@/components/odss/search/stock-search';
 import { SeasonalCalendarView } from '@/components/odss/fundamentals/seasonal-components';
 import { SwingTab } from '@/components/odss/fundamentals/swing-tab';
@@ -53,6 +54,7 @@ import {
   Dna,
   Globe2,
   Newspaper,
+  Wallet,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Recommendation } from '@/lib/odss/types';
@@ -216,7 +218,7 @@ function ODSSDashboard() {
 
       <main className="mx-auto w-full max-w-[1800px] flex-1 px-4 py-3">
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="mb-3 grid h-9 w-full grid-cols-2 border border-purple-100 bg-white/70 backdrop-blur sm:grid-cols-[repeat(13,minmax(0,1fr))]">
+          <TabsList className="mb-3 grid h-9 w-full grid-cols-2 border border-purple-100 bg-white/70 backdrop-blur sm:grid-cols-[repeat(14,minmax(0,1fr))]">
             <TerminalTabsTrigger value="dashboard" icon={<LayoutDashboard className="h-3.5 w-3.5" />} label="Dashboard" />
             <TerminalTabsTrigger value="opportunities" icon={<Trophy className="h-3.5 w-3.5" />} label="Opportunities" />
             <TerminalTabsTrigger value="brief" icon={<Newspaper className="h-3.5 w-3.5" />} label="Market Brief" />
@@ -225,6 +227,7 @@ function ODSSDashboard() {
             <TerminalTabsTrigger value="seasonal" icon={<Calendar className="h-3.5 w-3.5" />} label="Seasonal" />
             <TerminalTabsTrigger value="learning" icon={<Brain className="h-3.5 w-3.5" />} label="Learning" />
             <TerminalTabsTrigger value="strategylab" icon={<Dna className="h-3.5 w-3.5" />} label="Strategy Lab" />
+            <TerminalTabsTrigger value="papertrade" icon={<Wallet className="h-3.5 w-3.5" />} label="Paper Trade" />
             <TerminalTabsTrigger value="journal" icon={<BookOpen className="h-3.5 w-3.5" />} label="Journal" />
             <TerminalTabsTrigger value="analytics" icon={<BarChart3 className="h-3.5 w-3.5" />} label="Analytics" />
             <TerminalTabsTrigger value="validation" icon={<FlaskConical className="h-3.5 w-3.5" />} label="Validation" />
@@ -302,6 +305,11 @@ function ODSSDashboard() {
           {/* STRATEGY LAB */}
           <TabsContent value="strategylab" className="space-y-3">
             <StrategyLabPanel />
+          </TabsContent>
+
+          {/* PAPER TRADING */}
+          <TabsContent value="papertrade" className="space-y-3">
+            <PaperTradingPanel />
           </TabsContent>
 
           {/* JOURNAL */}
