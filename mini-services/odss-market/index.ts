@@ -251,7 +251,7 @@ async function fetchAndArchiveHistorical() {
     let count = 0;
     for (const meta of ALL_SYMBOLS) {
       try {
-        const candles = await yahooProvider.fetchHistoricalCandles(meta.symbol, '1y', '1d');
+        const candles = await yahooProvider.fetchHistoricalCandles(meta.symbol, '10y', '1d');
         if (candles.length > 0) {
           archiveHistoricalCandles(meta.symbol, candles);
           count++;

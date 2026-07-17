@@ -190,63 +190,27 @@ function gaussian(rng: () => number): number {
 /** Advance the simulator by one tick (1 minute). Returns the new tick number. */
 export function tick(): number {
   const s = getSimulator();
-  maybeRotateRegime(s);
-  const p = regimeParams(s.regime);
   const now = Date.now();
 
-  // Only apply synthetic VIX drift if no real VIX has been injected recently
-  // (within 30 seconds). This prevents the synthetic VIX from overwriting
-  // the real Yahoo VIX between injections.
-  const realVixActive = (s as any)._lastRealVixUpdate && (now - (s as any)._lastRealVixUpdate < 30000);
-  if (!realVixActive) {
-    s.indiaVix = Math.max(8, Math.min(40, s.indiaVix + s.vixDrift + gaussian(s.rng) * 0.05));
-  }
+  // REAL DATA ONLY POLICY: No synthetic VIX drift, no synthetic price movement,
+  // no regime rotation, no gaussian noise. The simulator simply holds the last
+  // known real price and adds flat candles for indicator continuity.
+  // All prices come from Yahoo Finance (injected every 10-20 seconds).
+  // All VIX comes from Yahoo Finance (^INDIAVIX).
+  // If real data hasn't been injected yet, the price stays at basePrice
+  // until the first real quote arrives.
 
   for (const sym of s.symbols.values()) {
-    // SKIP symbols with real data — their price is driven by Yahoo/NSE,
-    // not synthetic noise. This prevents the dashboard from showing
-    // a mix of real + synthetic prices.
-    if (sym.realDataActive && (now - sym.lastRealUpdate < 30000)) {
-      // Real data is fresh (< 30s old) — just add a candle with the real price
-      // so technical indicators have continuous data, but DON'T change the price.
-      sym.candles.push({
-        timestamp: now,
-        open: sym.price,
-        high: sym.price,
-        low: sym.price,
-        close: sym.price,
-        volume: sym.cumulativeVol,
-      });
-      if (sym.candles.length > 300) sym.candles.shift();
-      continue;
-    }
-
-    // Real data is stale or not active — apply synthetic price movement
-    const beta = sym.meta.beta;
-    // Combine regime drift + sector bias + idiosyncratic noise
-    const drift = (p.drift + sym.sectorBias * 0.0001) * beta;
-    const vol = p.vol * beta;
-    const shock = gaussian(s.rng) * vol;
-    const newPrice = Math.max(0.5, sym.price * (1 + drift + shock));
-
-    // Update OHLC
-    const minuteHigh = Math.max(sym.price, newPrice);
-    const minuteLow = Math.min(sym.price, newPrice);
-    const candle: Candle = {
+    // Hold the last known real price — add a flat candle for indicator continuity
+    sym.candles.push({
       timestamp: now,
       open: sym.price,
-      high: minuteHigh,
-      low: minuteLow,
-      close: newPrice,
-      volume: Math.floor(50000 + s.rng() * 200000) * beta,
-    };
-    sym.candles.push(candle);
-    if (sym.candles.length > 300) sym.candles.shift(); // keep last 5h
-
-    sym.cumulativeVol += candle.volume;
-    sym.price = newPrice;
-    sym.dayHigh = Math.max(sym.dayHigh, minuteHigh);
-    sym.dayLow = Math.min(sym.dayLow, minuteLow);
+      high: sym.price,
+      low: sym.price,
+      close: sym.price,
+      volume: sym.cumulativeVol,
+    });
+    if (sym.candles.length > 300) sym.candles.shift();
   }
 
   s.tickCount++;
