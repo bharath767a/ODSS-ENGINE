@@ -39,7 +39,7 @@ module.exports = {
       name: 'odss-market',
       cwd: '/home/z/my-project/mini-services/odss-market',
       script: '/usr/local/bin/bun',
-      args: '--hot index.ts',
+      args: 'index.ts',
       exec_mode: 'fork',
       env: {
         NODE_ENV: 'development',
@@ -49,7 +49,7 @@ module.exports = {
       autorestart: true,
       max_restarts: 10,
       restart_delay: 3000,
-      max_memory_restart: '300M',
+      max_memory_restart: '800M',
       watch: false,
       out_file: '/home/z/my-project/.zscripts/pm2-odss-market-out.log',
       error_file: '/home/z/my-project/.zscripts/pm2-odss-market-error.log',

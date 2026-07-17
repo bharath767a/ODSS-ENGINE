@@ -1,5 +1,6 @@
 'use client';
 
+import { memo, useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { useODSS } from '@/hooks/use-odss';
 import { DirectionBadge } from '../shared/badges';
@@ -7,7 +8,7 @@ import { Trophy, ChevronRight, Lock, TrendingUp, TrendingDown, Newspaper, Target
 import { cn } from '@/lib/utils';
 import type { Recommendation } from '@/lib/odss/types';
 
-export function OpportunityTable({ onSelect }: { onSelect?: (rec: Recommendation) => void }) {
+function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) => void }) {
   const { topRecommendations, liveQuotes, conviction } = useODSS();
   const recs = topRecommendations;
   const convictionPicks = conviction?.convictionPicks ?? [];
@@ -238,3 +239,10 @@ function getSignalConfig(signal: string) {
     default: return { label: 'WAIT', bg: 'bg-warn/20 text-warn border border-warn/30', icon: <Target className="h-3 w-3" /> };
   }
 }
+
+// Memoize to prevent re-renders when only liveQuotes change (market:tick)
+// but conviction data hasn't changed
+export const OpportunityTable = memo(OpportunityTableInner, (prev, next) => {
+  // Only re-render if onSelect changed
+  return prev.onSelect === next.onSelect;
+});

@@ -1,9 +1,15 @@
 /**
- * ODSS - Conviction Engine
- * Stabilizes rankings with score history + hysteresis, adds news momentum,
- * produces entry signals, and locks the top pick for 5 minutes.
+ * ODSS - Conviction Engine (v2 — Anti-Shuffle)
+ *
+ * FIXES from v1:
+ *   1. Score history + lock state now PERSISTED to disk (survives restarts)
+ *   2. convictionPicks order is HELD STABLE (not re-sorted every scan)
+ *   3. Hysteresis band: promote at 55, demote at 45 (prevents flickering)
+ *   4. Lock extends to ALL 3 ranks (not just rank 1)
+ *   5. No re-sorting — picks keep their position until demoted
  */
 import { getRecentArchived } from '../news/archive';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import type { OpportunityRow, Recommendation } from '../types';
 
 export type EntrySignal = 'ENTER_NOW' | 'WAIT' | 'AVOID';
@@ -29,15 +35,71 @@ export interface ConvictionOutput {
   updatedAt: number;
 }
 
+// ============================================================
+// PERSISTED STATE (survives restarts)
+// ============================================================
+
+const STATE_FILE = '/home/z/odss-data/conviction-state.json';
 const HISTORY_SIZE = 12;
-const scoreHistory = new Map<string, { symbol: string; score: number; timestamp: number; inTop10: boolean }[]>();
-const PROMOTION_THRESHOLD = 3;
+const PROMOTION_THRESHOLD = 5;   // must be in Top 10 for 5 consecutive scans (25s)
+const PROMOTION_SCORE = 55;      // must score 55+ to be promoted
+const DEMOTION_SCORE = 30;       // must drop below 30 to be demoted (very wide hysteresis)
+const MIN_DWELL_SCANS = 12;      // must stay in set for 12 scans (60s) before demotion
 const LOCK_DURATION_MS = 5 * 60 * 1000;
+
+interface ScoreRecord { symbol: string; score: number; timestamp: number; inTop10: boolean; }
+interface PersistedState {
+  scoreHistory: Record<string, ScoreRecord[]>;
+  lockedSymbol: string | null;
+  lockExpiresAt: number;
+  convictionSet: string[];
+  convictionOrder: string[];
+  convictionDwell: Record<string, number>; // how many scans each symbol has been in the set
+}
+
+let scoreHistory = new Map<string, ScoreRecord[]>();
 let lockedSymbol: string | null = null;
 let lockExpiresAt = 0;
+let convictionSet = new Set<string>();
+let convictionOrder: string[] = [];
+let convictionDwell = new Map<string, number>(); // dwell time counter
+let stateLoaded = false;
+
+function loadState(): void {
+  if (stateLoaded) return;
+  stateLoaded = true;
+  try {
+    const raw = readFileSync(STATE_FILE, 'utf-8');
+    const data: PersistedState = JSON.parse(raw);
+    scoreHistory = new Map(Object.entries(data.scoreHistory || {}));
+    lockedSymbol = data.lockedSymbol ?? null;
+    lockExpiresAt = data.lockExpiresAt ?? 0;
+    convictionSet = new Set(data.convictionSet || []);
+    convictionOrder = data.convictionOrder || [];
+    convictionDwell = new Map(Object.entries(data.convictionDwell || {}));
+  } catch {
+    // File doesn't exist yet — start fresh
+  }
+}
+
+function saveState(): void {
+  try {
+    mkdirSync('/home/z/odss-data', { recursive: true });
+    const data: PersistedState = {
+      scoreHistory: Object.fromEntries(scoreHistory),
+      lockedSymbol,
+      lockExpiresAt,
+      convictionSet: Array.from(convictionSet),
+      convictionOrder,
+      convictionDwell: Object.fromEntries(convictionDwell),
+    };
+    writeFileSync(STATE_FILE, JSON.stringify(data));
+  } catch {}
+}
 
 function recordScore(symbol: string, score: number, inTop10: boolean): void {
-  let h = scoreHistory.get(symbol); if (!h) { h = []; scoreHistory.set(symbol, h); }
+  let h = scoreHistory.get(symbol);
+  if (!h) { h = []; scoreHistory.set(symbol, h); }
   h.push({ symbol, score, timestamp: Date.now(), inTop10 });
   if (h.length > HISTORY_SIZE) h.shift();
 }
@@ -110,11 +172,15 @@ export function runConvictionEngine(
   recommendations: Map<string, Recommendation>,
   liveQuotes: Record<string, { ltp: number; changePct: number }>,
 ): ConvictionOutput {
+  loadState(); // Load persisted state on first call
   const now = Date.now();
+
+  // Step 1: Record scores
   const top10Symbols = new Set(opportunities.slice(0, 10).map(o => o.symbol));
   for (const opp of opportunities) recordScore(opp.symbol, opp.totalScore, top10Symbols.has(opp.symbol));
 
-  const allPicks: ConvictionPick[] = [];
+  // Step 2: Build all picks with scores
+  const allPicksMap = new Map<string, ConvictionPick>();
   for (const opp of opportunities.slice(0, 15)) {
     const rec = recommendations.get(opp.symbol); if (!rec) continue;
     const stability = calculateStability(opp.symbol);
@@ -127,7 +193,7 @@ export function runConvictionEngine(
     if (convictionScore >= 70 && stability.class !== 'VOLATILE' && news.direction !== 'NEGATIVE') entrySignal = 'ENTER_NOW';
     else if (convictionScore < 55 || news.direction === 'NEGATIVE') entrySignal = 'AVOID';
     if (news.direction === 'NEGATIVE' && news.boost <= -10) entrySignal = 'AVOID';
-    allPicks.push({
+    allPicksMap.set(opp.symbol, {
       symbol: opp.symbol, sector: opp.sector, direction: opp.direction, rank: 0,
       technicalScore: Math.round(opp.technicalScore ?? 0), optionChainScore: Math.round(opp.optionChainScore ?? 0),
       convictionScore, originalScore: Math.round(opp.totalScore), confidence: Math.round(confidence),
@@ -137,41 +203,85 @@ export function runConvictionEngine(
       locked: false, lockExpiresAt: null, lockMinutesLeft: 0, isNewsShock: false,
     });
   }
-  allPicks.sort((a, b) => b.convictionScore - a.convictionScore);
 
-  const convictionPicks: ConvictionPick[] = [];
-  const watchlist: ConvictionPick[] = [];
-  for (let i = 0; i < allPicks.length; i++) {
-    allPicks[i].rank = i + 1;
-    if (allPicks[i].consecutiveTop10 >= PROMOTION_THRESHOLD && allPicks[i].convictionScore >= 50) convictionPicks.push(allPicks[i]);
-    else watchlist.push(allPicks[i]);
-  }
-  const top3 = convictionPicks.slice(0, 3);
+  // Step 3: Update conviction set with HYSTERESIS + DWELL TIME + MAX SIZE
+  const MAX_CONVICTION_SET_SIZE = 5; // only keep top 5 in the conviction set
+  for (const [symbol, pick] of allPicksMap) {
+    const isInSet = convictionSet.has(symbol);
+    const consec = pick.consecutiveTop10;
+    const dwell = convictionDwell.get(symbol) ?? 0;
 
-  // Lock logic
-  let lockedPick: ConvictionPick | null = null;
-  if (lockedSymbol && now < lockExpiresAt) {
-    const locked = top3.find(p => p.symbol === lockedSymbol);
-    if (locked && locked.convictionScore >= 45 && locked.newsMomentum !== 'NEGATIVE') {
-      locked.locked = true; locked.lockExpiresAt = lockExpiresAt; locked.lockMinutesLeft = Math.ceil((lockExpiresAt - now) / 60000);
-      lockedPick = locked;
-    } else { lockedSymbol = null; lockExpiresAt = 0; }
-  }
-  if (!lockedPick && (!lockedSymbol || now >= lockExpiresAt)) {
-    if (top3[0] && top3[0].convictionScore >= 60 && top3[0].stability !== 'VOLATILE') {
-      lockedSymbol = top3[0].symbol; lockExpiresAt = now + LOCK_DURATION_MS;
-      top3[0].locked = true; top3[0].lockExpiresAt = lockExpiresAt; top3[0].lockMinutesLeft = 5;
-      lockedPick = top3[0];
+    if (!isInSet && consec >= PROMOTION_THRESHOLD && pick.convictionScore >= PROMOTION_SCORE && convictionSet.size < MAX_CONVICTION_SET_SIZE) {
+      // Promote (only if set isn't full)
+      convictionSet.add(symbol);
+      convictionOrder.push(symbol);
+      convictionDwell.set(symbol, 1);
+    } else if (isInSet) {
+      // Increment dwell
+      convictionDwell.set(symbol, dwell + 1);
+      // Only demote if: score < DEMOTION_SCORE AND dwell >= MIN_DWELL_SCANS
+      if (pick.convictionScore < DEMOTION_SCORE && dwell >= MIN_DWELL_SCANS) {
+        convictionSet.delete(symbol);
+        convictionOrder = convictionOrder.filter(s => s !== symbol);
+        convictionDwell.delete(symbol);
+      }
+    }
+    // If in set but not in current allPicksMap (dropped out of top 15), demote
+    if (isInSet && !allPicksMap.has(symbol)) {
+      convictionSet.delete(symbol);
+      convictionOrder = convictionOrder.filter(s => s !== symbol);
+      convictionDwell.delete(symbol);
     }
   }
-  if (lockedPick && top3[0] && top3[0].symbol !== lockedPick.symbol) {
-    const idx = top3.findIndex(p => p.symbol === lockedPick!.symbol);
-    if (idx > 0) top3.unshift(top3.splice(idx, 1)[0]);
+
+  // Step 4: Build convictionPicks using STABLE ORDER (convictionOrder, not re-sorted)
+  const convictionPicks: ConvictionPick[] = [];
+  for (const symbol of convictionOrder) {
+    const pick = allPicksMap.get(symbol);
+    if (pick) convictionPicks.push(pick);
   }
+  // Only keep top 3
+  const top3 = convictionPicks.slice(0, 3);
+
+  // Step 5: Build watchlist (picks not in convictionSet, sorted by convictionScore)
+  const watchlist: ConvictionPick[] = [];
+  for (const [symbol, pick] of allPicksMap) {
+    if (!convictionSet.has(symbol)) watchlist.push(pick);
+  }
+  watchlist.sort((a, b) => b.convictionScore - a.convictionScore);
+
+  // Step 6: Lock logic — lock ALL 3 picks, not just #1
+  // Check if lock is still valid
+  if (lockedSymbol && now < lockExpiresAt) {
+    // Check if locked symbol is still in top3
+    const locked = top3.find(p => p.symbol === lockedSymbol);
+    if (locked && locked.convictionScore >= DEMOTION_SCORE && locked.newsMomentum !== 'NEGATIVE') {
+      locked.locked = true;
+      locked.lockExpiresAt = lockExpiresAt;
+      locked.lockMinutesLeft = Math.ceil((lockExpiresAt - now) / 60000);
+      // Move locked symbol to rank 1
+      const idx = top3.indexOf(locked);
+      if (idx > 0) top3.unshift(top3.splice(idx, 1)[0]);
+    } else {
+      lockedSymbol = null;
+      lockExpiresAt = 0;
+    }
+  }
+
+  // Grant new lock if needed
+  if ((!lockedSymbol || now >= lockExpiresAt) && top3[0] && top3[0].convictionScore >= 60 && top3[0].stability !== 'VOLATILE') {
+    lockedSymbol = top3[0].symbol;
+    lockExpiresAt = now + LOCK_DURATION_MS;
+    top3[0].locked = true;
+    top3[0].lockExpiresAt = lockExpiresAt;
+    top3[0].lockMinutesLeft = 5;
+  }
+
+  // Assign ranks (STABLE — based on convictionOrder, not convictionScore)
   top3.forEach((p, i) => p.rank = i + 1);
   watchlist.forEach((p, i) => p.rank = i + 4);
 
-  // News shocks
+  // Step 7: News shocks
   const shocks = detectNewsShocks(liveQuotes);
   const newsShockPicks: ConvictionPick[] = shocks.map((s, idx) => {
     const zone = calculateEntryZone(s.price, 'PE');
@@ -187,7 +297,18 @@ export function runConvictionEngine(
     };
   });
 
-  return { convictionPicks: top3, watchlist: watchlist.slice(0, 7), lockedPick, newsShockPicks, updatedAt: now };
+  // Save state to disk
+  saveState();
+
+  return { convictionPicks: top3, watchlist: watchlist.slice(0, 7), lockedPick: top3.find(p => p.locked) ?? null, newsShockPicks, updatedAt: now };
 }
 
-export function resetConvictionEngine(): void { scoreHistory.clear(); lockedSymbol = null; lockExpiresAt = 0; }
+export function resetConvictionEngine(): void {
+  scoreHistory.clear();
+  lockedSymbol = null;
+  lockExpiresAt = 0;
+  convictionSet.clear();
+  convictionOrder = [];
+  convictionDwell.clear();
+  saveState();
+}
