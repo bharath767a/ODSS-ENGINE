@@ -19,7 +19,8 @@ interface ODSSStore {
   sectors: SectorEngineOutput | null;
   rs: RSEngineOutput | null;
   opportunities: OpportunityEngineOutput | null;
-  recommendations: Map<string, Recommendation>; // by symbol
+  recommendations: Map<string, Recommendation>;
+  conviction: any | null;
   activeTrade: LiveTrade | null;
   completedTrades: LiveTrade[];
   decisionLog: { timestamp: number; level: string; engine: string; symbol?: string; message: string }[];
@@ -32,6 +33,7 @@ const store: ODSSStore = {
   rs: null,
   opportunities: null,
   recommendations: new Map(),
+  conviction: null,
   activeTrade: null,
   completedTrades: [],
   decisionLog: [],

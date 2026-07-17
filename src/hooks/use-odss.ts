@@ -16,6 +16,7 @@ export interface ODSSState {
   sectors: SectorEngineOutput | null;
   rs: RSEngineOutput | null;
   opportunities: OpportunityEngineOutput | null;
+  conviction: any | null;
   activeTrade: LiveTrade | null;
   topRecommendations: Recommendation[];
   decisionLog: { timestamp: number; level: string; engine: string; symbol?: string; message: string }[];
@@ -47,6 +48,7 @@ const initialState: ODSSState = {
   sectors: null,
   rs: null,
   opportunities: null,
+  conviction: null,
   activeTrade: null,
   topRecommendations: [],
   decisionLog: [],
@@ -93,6 +95,7 @@ function connect() {
       sectors: data.sectors,
       rs: data.rs,
       opportunities: data.opportunities,
+      conviction: data.conviction ?? null,
       activeTrade: data.activeTrade,
       topRecommendations: data.topRecommendations ?? [],
       decisionLog: data.decisionLog ?? [],
@@ -108,6 +111,7 @@ function connect() {
       sectors: data.sectors ?? currentState.sectors,
       rs: data.rs ?? currentState.rs,
       opportunities: data.opportunities ?? currentState.opportunities,
+      conviction: data.conviction ?? currentState.conviction,
       activeTrade: data.activeTrade !== undefined ? data.activeTrade : currentState.activeTrade,
       topRecommendations: data.topRecommendations ?? currentState.topRecommendations,
       decisionLog: data.decisionLog ?? currentState.decisionLog,

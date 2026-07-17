@@ -26,6 +26,7 @@ import { runRiskEngine } from './engines/risk-engine';
 import { runDecisionEngine } from './engines/decision-engine';
 import { runTradeManagementEngine } from './engines/trade-management-engine';
 import { runExitEngine } from './engines/exit-engine';
+import { runConvictionEngine } from './engines/conviction-engine';
 import { createInitialTrade, nextTradeState, applyStateTransition } from './state-machine';
 import {
   getStore,
@@ -108,6 +109,14 @@ export async function runScan(): Promise<void> {
       };
       store.recommendations.set(opp.symbol, rec);
     }
+
+    // 5b. Conviction Engine — stabilizes rankings, adds news momentum
+    const liveQuotes: Record<string, { ltp: number; changePct: number }> = {};
+    for (const opp of opportunities.rows.slice(0, 15)) {
+      const q = getQuote(opp.symbol);
+      if (q) liveQuotes[opp.symbol] = { ltp: q.ltp, changePct: q.changePct };
+    }
+    try { store.conviction = runConvictionEngine(opportunities.rows, store.recommendations, liveQuotes); } catch {}
 
     // 6. Active trade management (if any)
     const active = getActiveTrade();

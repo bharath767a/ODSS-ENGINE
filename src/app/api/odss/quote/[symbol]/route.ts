@@ -1,71 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getDataRouter } from '@/lib/odss/data-providers/router';
-import { ALL_SYMBOLS } from '@/lib/odss/universe';
+import { readFileSync } from 'fs';
 
 export const dynamic = 'force-dynamic';
 
-// GET /api/odss/quote/[symbol] — live quote for a symbol
-// GET /api/odss/quote/all — all quotes
-//
-// Uses the REAL data provider router ONLY (NSE → Yahoo → Angel One).
-// If no real provider can return a quote, the API responds with a
-// "no data" error — it does NOT fall back to the simulator.
-//
-// The response includes a `source` field: 'NSE' | 'YAHOO' | 'ANGEL_ONE'
-// so the UI can show which provider supplied the price.
+const QUOTES_FILE = '/home/z/odss-data/quotes.json';
+let cache: { data: any; ts: number } = { data: null, ts: 0 };
+const CACHE_TTL = 2000;
+
+function readQuotesFile(): any | null {
+  if (cache.data && Date.now() - cache.ts < CACHE_TTL) return cache.data;
+  try {
+    const raw = readFileSync(QUOTES_FILE, 'utf-8');
+    const data = JSON.parse(raw);
+    cache.data = data;
+    cache.ts = Date.now();
+    return data;
+  } catch {
+    return cache.data;
+  }
+}
+
 export async function GET(req: NextRequest, { params }: { params: Promise<{ symbol: string }> }) {
   const { symbol } = await params;
-  const router = getDataRouter();
-
-  // ---- /quote/all — bulk fetch via the router ----
+  const allData = readQuotesFile();
+  if (!allData || !allData.quotes || allData.quotes.length === 0) {
+    return NextResponse.json({ error: 'Market service data not available yet', timestamp: Date.now() }, { status: 503 });
+  }
   if (symbol === 'all') {
-    try {
-      const symbols = ALL_SYMBOLS.map((s) => s.symbol);
-      const quotesMap = await router.getAllQuotes(symbols);
-      if (quotesMap.size === 0) {
-        return NextResponse.json(
-          {
-            error: 'No live data available',
-            timestamp: Date.now(),
-            hint: 'Yahoo Finance provider may be rate-limited. Try again in a few seconds.',
-          },
-          { status: 503 },
-        );
-      }
-      const quotes = Array.from(quotesMap.values());
-      const source = router.getPreferredProvider() ?? 'REAL';
-      return NextResponse.json({ quotes, source });
-    } catch {
-      return NextResponse.json(
-        {
-          error: 'No live data available',
-          timestamp: Date.now(),
-          hint: 'Yahoo Finance provider may be rate-limited. Try again in a few seconds.',
-        },
-        { status: 503 },
-      );
-    }
+    return NextResponse.json({ quotes: allData.quotes, source: allData.source ?? 'YAHOO', nifty: allData.nifty, bankNifty: allData.bankNifty, vix: allData.vix });
   }
-
   const sym = symbol.toUpperCase();
-
-  // ---- Single-symbol quote — router only, no simulator fallback ----
-  try {
-    const realQuote = await router.getQuote(sym);
-    if (realQuote && realQuote.ltp > 0) {
-      return NextResponse.json({ ...realQuote, source: router.getPreferredProvider() ?? 'REAL' });
-    }
-  } catch {
-    // fall through to the "no data" response below
-  }
-
-  return NextResponse.json(
-    {
-      error: 'No live data available',
-      symbol: sym,
-      timestamp: Date.now(),
-      hint: 'Yahoo Finance provider may be rate-limited. Try again in a few seconds.',
-    },
-    { status: 404 },
-  );
+  const q = allData.quotes.find((x: any) => x.symbol === sym);
+  if (q && q.ltp > 0) return NextResponse.json({ ...q, source: allData.source ?? 'YAHOO' });
+  return NextResponse.json({ error: 'No live data for this symbol', symbol: sym, timestamp: Date.now() }, { status: 404 });
 }

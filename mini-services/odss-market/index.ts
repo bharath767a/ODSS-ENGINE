@@ -12,6 +12,7 @@
  */
 import { createServer } from 'http';
 import { Server } from 'socket.io';
+import { writeFileSync, readFileSync } from 'fs';
 import { tick, getQuote, getAllQuotes, getIndiaVix, getMarketBreadth, getOptionChain, resetSimulator, injectRealQuote, injectRealVix } from '../../src/lib/odss/simulator/market-simulator';
 import { runScan, enterTrade, exitTrade } from '../../src/lib/odss/orchestrator';
 import { getStore, loadActiveTradeFromDb } from '../../src/lib/odss/store/store';
@@ -90,6 +91,22 @@ const REAL_DATA_SYMBOLS = ALL_SYMBOLS.map((s) => s.symbol);
 let realDataEnabled = true;
 let lastRealDataFetch = 0;
 let realDataStats = { fetched: 0, failed: 0, lastSuccess: 0 as number | null, source: 'NONE' as string };
+
+// Write quotes to a shared file so the web server can read real prices
+function writeQuotesFile() {
+  try {
+    const allQuotes = getAllQuotes();
+    const nifty = getQuote('NIFTY');
+    const bankNifty = getQuote('BANKNIFTY');
+    const vix = getIndiaVix();
+    writeFileSync('/home/z/odss-data/quotes.json', JSON.stringify({
+      quotes: allQuotes.map((q) => ({ symbol: q.symbol, ltp: q.ltp, prevClose: q.prevClose, open: q.open, high: q.high, low: q.low, volume: q.volume, vwap: q.vwap, changePct: q.changePct, sector: q.sector })),
+      nifty: nifty ? { ltp: nifty.ltp, changePct: nifty.changePct, vwap: nifty.vwap, open: nifty.open, high: nifty.high, low: nifty.low } : null,
+      bankNifty: bankNifty ? { ltp: bankNifty.ltp, changePct: bankNifty.changePct, vwap: bankNifty.vwap } : null,
+      vix, ts: Date.now(), source: realDataStats.source,
+    }));
+  } catch (e) { console.warn('[odss-market] Failed to write quotes file:', (e as Error).message); }
+}
 
 async function fetchAndInjectRealData() {
   if (!realDataEnabled) return;
@@ -182,6 +199,8 @@ async function fetchAndInjectRealData() {
       realDataStats.source = 'YAHOO';
     }
     lastRealDataFetch = Date.now();
+    // Write quotes file so the web server can read real prices
+    writeQuotesFile();
   } catch (e) {
     realDataStats.failed++;
     console.warn('[odss-market] Real data fetch error:', (e as Error).message);
@@ -249,24 +268,43 @@ setInterval(async () => {
   if (!scanning) return;
   try {
     await runScan();
-    // Record scan if session is active
     if (isRecording()) {
       await recordScan();
     }
     const store = getStore();
+
+    // Write full state to shared file so the web server's API routes can read it
+    try {
+      const stateData = {
+        timestamp: Date.now(),
+        market: store.market,
+        sectors: store.sectors,
+        rs: store.rs,
+        opportunities: store.opportunities,
+        conviction: store.conviction,
+        activeTrade: store.activeTrade,
+        topRecommendations: Array.from(store.recommendations.values()).slice(0, 10),
+        decisionLog: store.decisionLog.slice(0, 50),
+        completedTrades: store.completedTrades.slice(0, 20),
+        lastScanAt: store.lastScanAt,
+      };
+      writeFileSync('/home/z/odss-data/engine-state.json', JSON.stringify(stateData));
+    } catch {}
+
     io.emit('odss:update', {
       timestamp: Date.now(),
       market: store.market,
       sectors: store.sectors,
       rs: store.rs,
       opportunities: store.opportunities,
+      conviction: store.conviction,
       activeTrade: store.activeTrade,
       topRecommendations: Array.from(store.recommendations.values()).slice(0, 10),
       decisionLog: store.decisionLog.slice(0, 20),
       recording: isRecording(),
     });
-  } catch (e) {
-    console.error('[odss-market] Scan error:', e.message);
+  } catch (e: any) {
+    console.error('[odss-market] Scan error:', e?.message || e);
   }
 }, SCAN_INTERVAL_MS);
 

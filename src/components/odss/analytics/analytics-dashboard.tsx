@@ -7,12 +7,30 @@ import { cn } from '@/lib/utils';
 
 export function AnalyticsDashboard() {
   const [data, setData] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let mounted = true;
     fetch('/api/odss/analytics')
-      .then((r) => r.json())
-      .then(setData);
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const text = await r.text();
+        if (!text) throw new Error('Empty response');
+        return JSON.parse(text);
+      })
+      .then((d) => { if (mounted) setData(d); })
+      .catch((e) => { if (mounted) setError(e.message || 'Failed to load analytics'); });
+    return () => { mounted = false; };
   }, []);
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-2 py-8">
+        <p className="font-mono text-sm text-rose-600">Analytics unavailable</p>
+        <p className="font-mono text-[10px] text-muted-foreground">{error}</p>
+      </div>
+    );
+  }
 
   if (!data) {
     return (

@@ -69,8 +69,8 @@ export function runOptionChainEngine(symbol: string): OptionChainEngineOutput {
   if (callWritingTrend === 'INCREASING' && putWritingTrend !== 'INCREASING') score += 15;
   // Max pain alignment (price tends to gravitate to max pain)
   score += Math.abs(spot - maxPainStrike) / spot < 0.005 ? 10 : 5;
-  // Spread tightness (liquidity)
-  score += spread < atmCall!.ltp * 0.02 ? 10 : 5;
+  // Spread tightness (liquidity) — null-safe: atmCall may be undefined
+  score += (atmCall && atmCall.ltp > 0 && spread < atmCall.ltp * 0.02) ? 10 : 5;
   // IV rank (good premium selling vs buying perspective)
   score += ivRank > 30 && ivRank < 70 ? 10 : 5;
   // Unwinding detection
