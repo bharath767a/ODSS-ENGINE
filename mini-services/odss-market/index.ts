@@ -25,6 +25,7 @@ import { getDataRouter } from '../../src/lib/odss/data-providers/router';
 import { ALL_SYMBOLS } from '../../src/lib/odss/universe';
 import { fetchRealNews } from '../../src/lib/odss/news/news-fetcher';
 import { archiveNews } from '../../src/lib/odss/news/archive';
+import { archiveLiveQuotes, archiveHistoricalCandles } from '../../src/lib/odss/archive/data-archive';
 import type { Direction } from '../../src/lib/odss/types';
 
 const PORT = 3002;
@@ -203,6 +204,8 @@ async function fetchAndInjectRealData() {
     lastRealDataFetch = Date.now();
     // Write quotes file so the web server can read real prices
     writeQuotesFile();
+    // Archive live quotes for permanent storage (never deleted)
+    try { archiveLiveQuotes(getAllQuotes()); } catch {}
   } catch (e) {
     realDataStats.failed++;
     console.warn('[odss-market] Real data fetch error:', (e as Error).message);
@@ -235,6 +238,35 @@ async function fetchAndArchiveNews() {
 setTimeout(fetchAndArchiveNews, 5000); // start after 5s
 setInterval(fetchAndArchiveNews, 5 * 60 * 1000); // every 5 minutes
 console.log('[odss-market] News archiving loop started (5-min interval)');
+
+// ============================================================
+// Historical Data Archive — fetch 1 year of daily candles for
+// all symbols on startup, store permanently. Refresh weekly.
+// ============================================================
+async function fetchAndArchiveHistorical() {
+  try {
+    const router = getDataRouter();
+    const yahooProvider = router.getProvider('YAHOO');
+    if (!yahooProvider) return;
+    let count = 0;
+    for (const meta of ALL_SYMBOLS) {
+      try {
+        const candles = await yahooProvider.fetchHistoricalCandles(meta.symbol, '1y', '1d');
+        if (candles.length > 0) {
+          archiveHistoricalCandles(meta.symbol, candles);
+          count++;
+        }
+        await new Promise(r => setTimeout(r, 200)); // rate-limit friendly
+      } catch { /* skip individual failures */ }
+    }
+    console.log(`[odss-market] Historical data archived: ${count} symbols`);
+  } catch (e) {
+    console.warn('[odss-market] Historical archive failed:', (e as Error).message);
+  }
+}
+setTimeout(fetchAndArchiveHistorical, 10000); // start after 10s
+setInterval(fetchAndArchiveHistorical, 7 * 24 * 60 * 60 * 1000); // weekly refresh
+console.log('[odss-market] Historical data archive loop started (weekly refresh)');
 
 let ticking = true;
 let scanning = true;

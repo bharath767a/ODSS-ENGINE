@@ -75,7 +75,7 @@ export function TickerTape() {
   // If nothing yet, show a placeholder line so the tape still scrolls
   if (items.length === 0) {
     return (
-      <div className="relative z-20 border-y border-border/60 bg-[#0c1118]/80 backdrop-blur-sm">
+      <div className="relative z-20 border-y border-purple-100 bg-white/80 backdrop-blur-sm">
         <div className="overflow-hidden">
           <div className="whitespace-nowrap px-4 py-1.5 font-mono text-[11px] text-muted-foreground">
             Awaiting market data…
@@ -89,10 +89,10 @@ export function TickerTape() {
   const loopItems = [...items, ...items];
 
   return (
-    <div className="ticker-track relative z-20 overflow-hidden border-y border-border/60 bg-[#0c1118]/80 backdrop-blur-sm">
+    <div className="ticker-track relative z-20 overflow-hidden border-y border-purple-100 bg-white/80 backdrop-blur-sm">
       {/* Edge fades for visual polish */}
-      <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-12 bg-gradient-to-r from-[#0c1118] to-transparent" />
-      <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-[#0c1118] to-transparent" />
+      <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-12 bg-gradient-to-r from-white to-transparent" />
+      <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-white to-transparent" />
 
       <div className="flex w-max animate-ticker items-center">
         {loopItems.map((item, i) => {
@@ -102,20 +102,20 @@ export function TickerTape() {
             <div
               key={`${item.symbol}-${i}`}
               className={cn(
-                'flex items-center gap-2 border-r border-border/40 px-4 py-1.5 font-mono text-[11px] tnum',
-                isIndex && 'bg-[#0e131a]/60'
+                'flex items-center gap-2 border-r border-purple-100 px-4 py-1.5 font-mono text-[11px] tnum',
+                isIndex && 'bg-purple-50/60'
               )}
             >
               <span
                 className={cn(
                   'font-semibold tracking-wide',
-                  isIndex ? 'text-foreground' : 'text-muted-foreground'
+                  isIndex ? 'text-purple-700' : 'text-foreground/80'
                 )}
               >
                 {item.symbol}
               </span>
               {item.price !== undefined && (
-                <span className="text-foreground/90">
+                <span className="font-semibold text-foreground">
                   {item.price.toLocaleString('en-IN', {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2,
@@ -125,15 +125,15 @@ export function TickerTape() {
               {item.changePct !== undefined && (
                 <span
                   className={cn(
-                    'font-medium',
-                    positive ? 'text-bull text-glow-bull' : 'text-bear text-glow-bear'
+                    'font-bold',
+                    positive ? 'text-bull' : 'text-bear'
                   )}
                 >
                   {positive ? '▲' : '▼'} {Math.abs(item.changePct).toFixed(2)}%
                 </span>
               )}
               {item.price !== undefined && (
-                <Sparkline price={item.price} width={48} height={14} className="opacity-80" />
+                <Sparkline price={item.price} width={48} height={14} className="opacity-60" />
               )}
             </div>
           );
