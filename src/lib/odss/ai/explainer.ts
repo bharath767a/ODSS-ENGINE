@@ -42,7 +42,11 @@ function buildContextForDecision(rec: Recommendation, mode: 'SELECTED' | 'REJECT
   return facts;
 }
 
+let explainerCooldownUntil = 0;
+
 async function callLLM(system: string, user: string): Promise<string | null> {
+  // Respect cooldown to prevent 429 cascades
+  if (Date.now() < explainerCooldownUntil) return null;
   try {
     const zai = await ZAI.create();
     const completion = await zai.chat.completions.create({
@@ -54,6 +58,10 @@ async function callLLM(system: string, user: string): Promise<string | null> {
     });
     return completion.choices[0]?.message?.content ?? null;
   } catch (e) {
+    const msg = (e as Error)?.message ?? '';
+    if (msg.includes('429') || msg.includes('Too many requests') || msg.includes('500')) {
+      explainerCooldownUntil = Date.now() + 5 * 60_000;
+    }
     return null;
   }
 }
