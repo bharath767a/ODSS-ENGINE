@@ -23,6 +23,8 @@ import { checkGuardrails, registerTradeEntry, registerTradeExit, getGuardrailSta
 import { ensureSeedUsers } from '../../src/lib/user-manager';
 import { getDataRouter } from '../../src/lib/odss/data-providers/router';
 import { ALL_SYMBOLS } from '../../src/lib/odss/universe';
+import { fetchRealNews } from '../../src/lib/odss/news/news-fetcher';
+import { archiveNews } from '../../src/lib/odss/news/archive';
 import type { Direction } from '../../src/lib/odss/types';
 
 const PORT = 3002;
@@ -212,6 +214,27 @@ setInterval(fetchAndInjectRealData, REAL_DATA_INTERVAL_MS);
 // Fetch immediately on startup (after a 2s delay to let the simulator warm up)
 setTimeout(fetchAndInjectRealData, 2000);
 console.log('[odss-market] Real data injection loop started (Yahoo Finance, 10s interval)');
+
+// ============================================================
+// Background News Archiving — fetches real news every 5 minutes
+// and archives it with entity extraction for cross-linking.
+// This builds the AI's "memory" continuously without depending
+// on frontend requests.
+// ============================================================
+async function fetchAndArchiveNews() {
+  try {
+    const news = await fetchRealNews(50);
+    if (news.length > 0) {
+      archiveNews(news);
+      console.log(`[odss-market] News archived: ${news.length} items`);
+    }
+  } catch (e) {
+    console.warn('[odss-market] News archive failed:', (e as Error).message);
+  }
+}
+setTimeout(fetchAndArchiveNews, 5000); // start after 5s
+setInterval(fetchAndArchiveNews, 5 * 60 * 1000); // every 5 minutes
+console.log('[odss-market] News archiving loop started (5-min interval)');
 
 let ticking = true;
 let scanning = true;

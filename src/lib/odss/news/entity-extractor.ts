@@ -56,6 +56,6 @@ export function extractEntities(title: string, description?: string): NewsEntiti
   const impactMagnitude: ImpactMagnitude = (highCount >= 2 || hasHighKw) ? 'HIGH' : (highCount >= 1 || stocks.size >= 2) ? 'MEDIUM' : 'LOW';
   const posEvents: EventType[] = ['POLICY','M&A','MACRO'];
   const swingEvents: EventType[] = ['EARNINGS','GUIDANCE','RATING','BLOCK_DEAL','INSIDER','IPO','ORDER'];
-  const timeHorizon: TimeHorizon = events.some(e => posEvents.includes(e)) ? 'POSITIONAL' : events.some(e => swingEvents.includes(e)) ? 'SWING' : 'INTRADAY';
+  const timeHorizon: TimeHorizon = Array.from(events).some(e => posEvents.includes(e)) ? 'POSITIONAL' : Array.from(events).some(e => swingEvents.includes(e)) ? 'SWING' : 'INTRADAY';
   return { stocks: Array.from(stocks), sectors: Array.from(sectors), eventTypes: Array.from(events), impactMagnitude, timeHorizon, keywords };
 }

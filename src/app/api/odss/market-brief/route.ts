@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDataRouter } from '@/lib/odss/data-providers/router';
 import { getStore } from '@/lib/odss/store/store';
 import { getSymbolMeta, STOCKS } from '@/lib/odss/universe';
+import { readFileSync } from 'fs';
+import { fetchNewsForBrief } from '@/lib/odss/news/news-fetcher';
+import { generateNewsIntelligence } from '@/lib/odss/news/intelligence';
+import { archiveNews, getRecentArchived } from '@/lib/odss/news/archive';
 import type { Quote } from '@/lib/odss/types';
+import type { NewsItem } from '@/lib/odss/news/types';
 
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
@@ -92,13 +97,15 @@ export interface MarketBriefResponse {
   topLosers: GainerLoserItem[];
   news: NewsItem[];
   sectorPerformance: SectorPerfItem[];
+  newsIntelligence?: any;
   source: string;
   updatedAt: number;
 }
 
-// ---------- LLM cache (60s per type) ----------
-const LLM_CACHE_MS = 60_000;
+// ---------- LLM cache (5 min per type) + stale fallback ----------
+const LLM_CACHE_MS = 5 * 60_000;
 const llmCache = new Map<string, { summary: string; prediction: string; ts: number }>();
+const lastGoodBrief = new Map<string, { response: any; ts: number }>();
 
 async function callLLM(prompt: string): Promise<string | null> {
   try {
@@ -461,45 +468,54 @@ export async function GET(req: NextRequest) {
   try {
     const router = getDataRouter();
 
-    // ---- Fetch REAL index quotes + VIX from the router (ONLY) ----
+    // ---- Read REAL prices from the shared quotes file (written by market service) ----
+    // This avoids Yahoo rate-limiting (the 503 error) — the market service already
+    // fetches from Yahoo every 20s and writes to /home/z/odss-data/quotes.json
     let nifty: Quote | null = null;
     let bankNifty: Quote | null = null;
     let finNifty: Quote | null = null;
     let vix = 0;
-    let priceSource = 'REAL';
+    let priceSource = 'YAHOO';
+    let stockQuotes: Quote[] = [];
 
     try {
-      [nifty, bankNifty, finNifty] = await Promise.all([
-        router.getQuote('NIFTY'),
-        router.getQuote('BANKNIFTY'),
-        router.getQuote('FINNIFTY'),
-      ]);
-      vix = await router.getIndiaVIX();
-      if (nifty?.ltp) priceSource = router.getPreferredProvider() ?? 'YAHOO';
+      const raw = readFileSync('/home/z/odss-data/quotes.json', 'utf-8');
+      const allData = JSON.parse(raw);
+      const allQuotes = allData.quotes ?? [];
+
+      // Find index quotes
+      const niftyQ = allQuotes.find((q: any) => q.symbol === 'NIFTY');
+      const bankNiftyQ = allQuotes.find((q: any) => q.symbol === 'BANKNIFTY');
+      const finNiftyQ = allQuotes.find((q: any) => q.symbol === 'FINNIFTY');
+
+      if (niftyQ) nifty = { symbol: 'NIFTY', sector: 'INDEX', ltp: niftyQ.ltp, prevClose: niftyQ.prevClose || niftyQ.ltp, open: niftyQ.open || niftyQ.ltp, high: niftyQ.high || niftyQ.ltp, low: niftyQ.low || niftyQ.ltp, dayHigh: niftyQ.high || niftyQ.ltp, dayLow: niftyQ.low || niftyQ.ltp, volume: 0, vwap: niftyQ.vwap || niftyQ.ltp, changePct: niftyQ.changePct || 0, candles: [], timestamp: Date.now() };
+      if (bankNiftyQ) bankNifty = { symbol: 'BANKNIFTY', sector: 'INDEX', ltp: bankNiftyQ.ltp, prevClose: bankNiftyQ.prevClose || bankNiftyQ.ltp, open: bankNiftyQ.open || bankNiftyQ.ltp, high: bankNiftyQ.high || bankNiftyQ.ltp, low: bankNiftyQ.low || bankNiftyQ.ltp, dayHigh: bankNiftyQ.high || bankNiftyQ.ltp, dayLow: bankNiftyQ.low || bankNiftyQ.ltp, volume: 0, vwap: bankNiftyQ.vwap || bankNiftyQ.ltp, changePct: bankNiftyQ.changePct || 0, candles: [], timestamp: Date.now() };
+      if (finNiftyQ) finNifty = { symbol: 'FINNIFTY', sector: 'INDEX', ltp: finNiftyQ.ltp, prevClose: finNiftyQ.prevClose || finNiftyQ.ltp, open: finNiftyQ.open || finNiftyQ.ltp, high: finNiftyQ.high || finNiftyQ.ltp, low: finNiftyQ.low || finNiftyQ.ltp, dayHigh: finNiftyQ.high || finNiftyQ.ltp, dayLow: finNiftyQ.low || finNiftyQ.ltp, volume: 0, vwap: finNiftyQ.vwap || finNiftyQ.ltp, changePct: finNiftyQ.changePct || 0, candles: [], timestamp: Date.now() };
+      vix = allData.vix || 0;
+
+      // Get stock quotes
+      stockQuotes = allQuotes
+        .filter((q: any) => q.ltp > 0 && !['NIFTY','BANKNIFTY','FINNIFTY','MIDCPNIFTY'].includes(q.symbol))
+        .map((q: any) => ({
+          symbol: q.symbol, sector: q.sector || '', ltp: q.ltp, prevClose: q.prevClose || q.ltp,
+          open: q.open || q.ltp, high: q.high || q.ltp, low: q.low || q.ltp,
+          dayHigh: q.high || q.ltp, dayLow: q.low || q.ltp, volume: q.volume || 0,
+          vwap: q.vwap || q.ltp, changePct: q.changePct || 0, candles: [], timestamp: Date.now(),
+        }));
     } catch {
-      // fall through to the "no data" check below
+      // quotes.json doesn't exist yet — fall through to 503
     }
 
-    // NIFTY and BANKNIFTY are mandatory — if either is missing, return 503.
+    // NIFTY and BANKNIFTY are mandatory — if either is missing, serve stale fallback.
     if (!nifty?.ltp || !bankNifty?.ltp) {
+      const stale = lastGoodBrief.get(type);
+      if (stale) {
+        return NextResponse.json({ ...stale.response, source: `${stale.response.source} (STALE)` });
+      }
       return NextResponse.json(
-        {
-          error: 'No live market data available',
-          timestamp: Date.now(),
-          hint: 'Yahoo Finance provider may be rate-limited. Try again in a few seconds.',
-        },
+        { error: 'Market service data not available yet', timestamp: Date.now(), hint: 'The market service may be starting up.' },
         { status: 503 },
       );
-    }
-
-    // ---- Fetch REAL stock quotes for breadth / gainers / losers / sectors ----
-    const stockSymbols = STOCKS.map((s) => s.symbol);
-    let stockQuotes: Quote[] = [];
-    try {
-      const quotesMap = await router.getAllQuotes(stockSymbols);
-      stockQuotes = Array.from(quotesMap.values()).filter((q) => q && q.ltp > 0);
-    } catch {
-      // No stock quotes available — breadth/gainers/sectors will be empty
     }
 
     // ---- Breadth (derived from REAL Yahoo stock quotes) ----
@@ -660,7 +676,9 @@ export async function GET(req: NextRequest) {
     });
 
     // ---- News ----
-    const news = buildNewsItems(type, {
+    // Merge ENGINE-GENERATED news (price-based headlines) with REAL news
+    // fetched from Economic Times, Moneycontrol, Business Standard, etc.
+    const engineNews = buildNewsItems(type, {
       nifty: niftyClose,
       niftyPct: niftyChangePct,
       bankNifty: bankNiftyClose,
@@ -670,6 +688,19 @@ export async function GET(req: NextRequest) {
       losers: topLosers,
       sectors: topSectors,
     });
+
+    // Fetch real news (5-min cached, won't slow down the response)
+    let realNews: NewsItem[] = [];
+    try {
+      realNews = await fetchNewsForBrief(type, 10);
+      // Archive for entity extraction + cross-linking
+      try { archiveNews(realNews); } catch {}
+    } catch {
+      // if news fetch fails, just use engine news
+    }
+
+    // Combine: real news first (most recent), then engine-generated headlines
+    const news = [...realNews, ...engineNews].slice(0, 20);
 
     const source = priceSource;
 
@@ -700,12 +731,26 @@ export async function GET(req: NextRequest) {
       topLosers,
       news,
       sectorPerformance,
+      newsIntelligence: {
+        realNewsCount: realNews.length,
+        engineNewsCount: engineNews.length,
+        realSources: ['Economic Times', 'Moneycontrol', 'Business Standard', 'LiveMint'],
+        archivedCount: (() => { try { return getRecentArchived(24).length; } catch { return 0; } })(),
+      },
       source,
       updatedAt: Date.now(),
     };
 
+    // Cache as last-known-good for stale fallback
+    lastGoodBrief.set(type, { response, ts: Date.now() });
+
     return NextResponse.json(response);
   } catch (e) {
+    // Serve stale fallback on any error
+    const stale = lastGoodBrief.get(type);
+    if (stale) {
+      return NextResponse.json({ ...stale.response, source: `${stale.response.source} (STALE)` });
+    }
     return NextResponse.json(
       { error: 'Failed to build market brief', message: (e as Error).message },
       { status: 500 },

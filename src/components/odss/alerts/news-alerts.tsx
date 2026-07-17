@@ -71,16 +71,16 @@ export function NewsAlerts() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/odss/market-brief?type=pre', { cache: 'no-store' });
+      // Fetch REAL news from the dedicated news API (Economic Times, Moneycontrol, etc.)
+      const res = await fetch('/api/odss/news?type=all&limit=15', { cache: 'no-store' });
       if (!res.ok) {
         const errBody = await res.json().catch(() => ({}));
         throw new Error(errBody.message ?? `HTTP ${res.status}`);
       }
-      const data: MarketBriefLite = await res.json();
-      // Take the latest 10 news items
+      const data = await res.json();
       setNews((data.news ?? []).slice(0, 10));
-      setUpdatedAt(data.updatedAt ?? Date.now());
-      setSource(data.source ?? '');
+      setUpdatedAt(data.timestamp ?? Date.now());
+      setSource(data.sources ? data.sources.join(', ') : 'Live RSS Feeds');
     } catch (e) {
       setError((e as Error).message || 'Failed to load news');
       setNews([]);
