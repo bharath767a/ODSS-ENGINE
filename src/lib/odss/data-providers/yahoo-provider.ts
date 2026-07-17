@@ -60,9 +60,9 @@ export class YahooProvider implements Provider {
     rateLimitUntil: null,
   };
 
-  private readonly QUOTE_TTL = 4000;      // 4 seconds
-  private readonly VIX_TTL = 5000;        // 5 seconds
-  private readonly HISTORY_TTL = 300_000; // 5 minutes
+  private readonly QUOTE_TTL = 15000;     // 15 seconds (reduces Yahoo calls for 94 symbols)
+  private readonly VIX_TTL = 15000;       // 15 seconds
+  private readonly HISTORY_TTL = 604800_000; // 7 days (historical data doesn't change often)
 
   isConfigured(): boolean {
     return true;

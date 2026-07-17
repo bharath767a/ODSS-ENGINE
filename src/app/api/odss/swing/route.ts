@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { STOCKS, type SymbolMeta } from '@/lib/odss/universe';
+import { readFileSync } from 'fs';
 
 export const dynamic = 'force-dynamic';
 
@@ -60,15 +61,16 @@ interface SwingRecommendation {
 }
 
 async function buildRecommendations(): Promise<SwingRecommendation[]> {
-  // Lazily try to import the data router so we never crash if it is missing
-  let router: { getQuote: (s: string) => Promise<{ ltp: number } | null> } | null = null;
+  // Read real prices from shared quotes file (written by market service every 10s)
+  let liveQuotes: Record<string, any> = {};
   try {
-    const mod: any = await import('@/lib/odss/data-providers/router');
-    if (typeof mod.getDataRouter === 'function') {
-      router = mod.getDataRouter();
+    const raw = readFileSync('/home/z/odss-data/quotes.json', 'utf-8');
+    const all = JSON.parse(raw);
+    for (const q of all.quotes ?? []) {
+      liveQuotes[q.symbol] = q;
     }
   } catch {
-    router = null;
+    // quotes.json not available yet
   }
 
   const recs: SwingRecommendation[] = [];
@@ -77,16 +79,10 @@ async function buildRecommendations(): Promise<SwingRecommendation[]> {
     let price = meta.basePrice;
     let source: 'REAL' | 'FALLBACK' = 'FALLBACK';
 
-    if (router) {
-      try {
-        const quote = await router.getQuote(meta.symbol);
-        if (quote && typeof quote.ltp === 'number' && quote.ltp > 0) {
-          price = quote.ltp;
-          source = 'REAL';
-        }
-      } catch {
-        // keep fallback price
-      }
+    const quote = liveQuotes[meta.symbol];
+    if (quote && quote.ltp > 0) {
+      price = quote.ltp;
+      source = 'REAL';
     }
 
     recs.push(generateFallbackRec(meta, price, source));

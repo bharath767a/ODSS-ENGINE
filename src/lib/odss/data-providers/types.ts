@@ -87,7 +87,7 @@ export const rateLimiter = new RateLimitManager();
 
 // Configure rate limits per provider
 rateLimiter.configure('NSE', 20, 60000);        // 20 req/min (NSE blocks aggressive callers)
-rateLimiter.configure('YAHOO', 100, 60000);     // 100 req/min (Yahoo is generous but rate-limits on abuse)
+rateLimiter.configure('YAHOO', 500, 60000);     // 500 req/min (need ~300 for 94 symbols every 20s)
 rateLimiter.configure('ANGEL_ONE', 180, 60000); // 3 req/sec
 rateLimiter.configure('UPSTOX', 300, 60000);    // 5 req/sec
 rateLimiter.configure('SIMULATOR', Infinity, 0); // unlimited

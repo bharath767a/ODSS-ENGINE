@@ -146,53 +146,41 @@ async function fetchAndInjectRealData() {
       return meta?.type === 'STOCK';
     });
 
-    // Fetch indices (small list, fetch all at once)
+    // Fetch ALL symbols in parallel batches of 5 (respecting Yahoo rate limits)
+    // With 94 symbols, this takes ~10 batches × 200ms = 2 seconds
+    // At 20s interval, that's 94 req / 20s = 282 req/min (under Yahoo's limit
+    // when combined with the 4s per-quote cache)
     let fetched = 0;
-    for (const sym of indices) {
-      try {
-        const q = await yahooProvider.getQuote(sym);
-        if (q && q.ltp > 0) {
-          injectRealQuote(sym, {
-            ltp: q.ltp,
-            prevClose: q.prevClose,
-            open: q.open,
-            high: q.high,
-            low: q.low,
-            volume: q.volume,
-            changePct: q.changePct,
-            vwap: q.vwap,
-          });
-          fetched++;
-          console.log(`[odss-market] Injected ${sym}: ${q.ltp} (change ${q.changePct.toFixed(2)}%)`);
-        }
-      } catch {
-        // individual quote failed — continue
-      }
-    }
+    const BATCH_SIZE = 5;
+    const BATCH_DELAY = 200; // ms between batches
 
-    // Fetch stocks in smaller batches to respect rate limits
-    const stockBatch = stocks.slice(0, 10); // fetch 10 stocks per cycle (rotates)
-    const offset = Math.floor(Date.now() / REAL_DATA_INTERVAL_MS) % Math.ceil(stocks.length / 10);
-    const startIdx = offset * 10;
-    const stockSlice = stocks.slice(startIdx, startIdx + 10);
-    for (const sym of stockSlice) {
-      try {
-        const q = await yahooProvider.getQuote(sym);
-        if (q && q.ltp > 0) {
-          injectRealQuote(sym, {
-            ltp: q.ltp,
-            prevClose: q.prevClose,
-            open: q.open,
-            high: q.high,
-            low: q.low,
-            volume: q.volume,
-            changePct: q.changePct,
-            vwap: q.vwap,
-          });
-          fetched++;
-        }
-      } catch {
-        // individual quote failed — continue
+    for (let i = 0; i < REAL_DATA_SYMBOLS.length; i += BATCH_SIZE) {
+      const batch = REAL_DATA_SYMBOLS.slice(i, i + BATCH_SIZE);
+      const results = await Promise.allSettled(
+        batch.map(async (sym) => {
+          const q = await yahooProvider.getQuote(sym);
+          if (q && q.ltp > 0) {
+            injectRealQuote(sym, {
+              ltp: q.ltp,
+              prevClose: q.prevClose,
+              open: q.open,
+              high: q.high,
+              low: q.low,
+              volume: q.volume,
+              changePct: q.changePct,
+              vwap: q.vwap,
+            });
+            return sym;
+          }
+          return null;
+        }),
+      );
+      for (const r of results) {
+        if (r.status === 'fulfilled' && r.value) fetched++;
+      }
+      // Small delay between batches
+      if (i + BATCH_SIZE < REAL_DATA_SYMBOLS.length) {
+        await new Promise(r => setTimeout(r, BATCH_DELAY));
       }
     }
 
