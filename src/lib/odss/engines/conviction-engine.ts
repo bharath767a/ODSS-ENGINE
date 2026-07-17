@@ -186,15 +186,33 @@ export function runConvictionEngine(
     const stability = calculateStability(opp.symbol);
     const news = calculateNewsMomentum(opp.symbol, opp.sector);
     const price = liveQuotes[opp.symbol]?.ltp ?? 0;
+    const changePct = liveQuotes[opp.symbol]?.changePct ?? 0;
+
+    // RE-EVALUATE DIRECTION: The opportunity engine picks direction based on
+    // engine votes (market/sector/RS/technical/option chain). But this can be
+    // WRONG when the actual price movement and news contradict the engine votes.
+    //
+    // The conviction engine overrides the direction when there's a clear
+    // contradiction:
+    //   - If price is UP >1% AND news is POSITIVE → force CE (don't show PE on a rising stock)
+    //   - If price is DOWN >1% AND news is NEGATIVE → force PE (don't show CE on a falling stock)
+    //   - Otherwise, keep the opportunity engine's direction
+    let direction = opp.direction;
+    if (changePct > 1 && news.direction === 'POSITIVE' && opp.direction === 'PE') {
+      direction = 'CE'; // Price rising + positive news = don't recommend PE
+    } else if (changePct < -1 && news.direction === 'NEGATIVE' && opp.direction === 'CE') {
+      direction = 'PE'; // Price falling + negative news = don't recommend CE
+    }
+
     const convictionScore = Math.round(opp.totalScore * 0.35 + (opp.optionChainScore ?? 50) * 0.20 + stability.score * 0.20 + (50 + news.boost * 2.5) * 0.15 + (50 + stability.trend * 2) * 0.10);
     let confidence = Math.min(100, Math.max(0, (rec.decision?.confidence ?? 50) + news.boost));
-    const zone = calculateEntryZone(price, opp.direction);
+    const zone = calculateEntryZone(price, direction);
     let entrySignal: EntrySignal = 'WAIT';
     if (convictionScore >= 70 && stability.class !== 'VOLATILE' && news.direction !== 'NEGATIVE') entrySignal = 'ENTER_NOW';
     else if (convictionScore < 55 || news.direction === 'NEGATIVE') entrySignal = 'AVOID';
     if (news.direction === 'NEGATIVE' && news.boost <= -10) entrySignal = 'AVOID';
     allPicksMap.set(opp.symbol, {
-      symbol: opp.symbol, sector: opp.sector, direction: opp.direction, rank: 0,
+      symbol: opp.symbol, sector: opp.sector, direction, rank: 0,
       technicalScore: Math.round(opp.technicalScore ?? 0), optionChainScore: Math.round(opp.optionChainScore ?? 0),
       convictionScore, originalScore: Math.round(opp.totalScore), confidence: Math.round(confidence),
       stability: stability.class, stabilityScore: Math.round(stability.score), trendScore: Math.round(stability.trend), consecutiveTop10: stability.consecutiveTop10,
