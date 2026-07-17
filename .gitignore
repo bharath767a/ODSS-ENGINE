@@ -51,4 +51,7 @@ prompt
 
 server.log
 # Skills directory
-/skills/
+/skills/backups/
+db/*.db
+upload/
+.zscripts/*.log
