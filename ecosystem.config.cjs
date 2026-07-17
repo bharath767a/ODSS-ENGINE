@@ -1,22 +1,12 @@
 /**
- * PM2 Ecosystem Configuration for ODSS
+ * PM2 Ecosystem Configuration for ODSS — PERMANENT
  *
- * This is the PERMANENT process management solution. PM2:
- *   - Auto-restarts processes if they crash
- *   - Survives container restarts (pm2 resurrect)
- *   - Provides logs, monitoring, and health checks
- *   - Replaces the fragile `bun run dev &` + `disown` approach
+ * CRITICAL: The web server MUST use --webpack flag (NOT Turbopack).
+ * Turbopack crashes repeatedly with "corrupted database" panics.
+ * Webpack is stable and reliable.
  *
- * Two processes managed:
- *   1. odss-web: Next.js dev server (port 3000)
- *   2. odss-market: Market data mini-service (port 3002)
- *
- * Usage:
- *   pm2 start ecosystem.config.cjs
- *   pm2 save          # save process list for resurrection
- *   pm2 resurrect     # restore on container restart
- *   pm2 status        # check all processes
- *   pm2 logs          # tail all logs
+ * The market service env MUST include DATABASE_URL pointing to
+ * /home/z/odss-data/custom.db (NOT the default project db/ folder).
  */
 module.exports = {
   apps: [
@@ -24,17 +14,18 @@ module.exports = {
       name: 'odss-web',
       cwd: '/home/z/my-project',
       script: 'node_modules/.bin/next',
-      args: 'dev -p 3000',
+      args: 'dev -p 3000 --webpack',
       exec_mode: 'fork',
       env: {
         NODE_ENV: 'development',
-        NODE_OPTIONS: '--max-old-space-size=512',
+        NODE_OPTIONS: '--max-old-space-size=1024',
+        DATABASE_URL: 'file:/home/z/odss-data/custom.db',
       },
       instances: 1,
       autorestart: true,
       max_restarts: 10,
       restart_delay: 3000,
-      max_memory_restart: '700M',
+      max_memory_restart: '1200M',
       watch: false,
       out_file: '/home/z/my-project/.zscripts/pm2-odss-web-out.log',
       error_file: '/home/z/my-project/.zscripts/pm2-odss-web-error.log',
@@ -52,6 +43,7 @@ module.exports = {
       exec_mode: 'fork',
       env: {
         NODE_ENV: 'development',
+        DATABASE_URL: 'file:/home/z/odss-data/custom.db',
       },
       instances: 1,
       autorestart: true,
