@@ -1446,3 +1446,35 @@ Notes for future agents:
 - Live active trade is read from the WebSocket snapshot via useODSS().activeTrade — no API call needed. The ActiveTab wraps the LiveTrade into a UnifiedClosedTrade so the same TradeDetailCard renders it.
 - estimateCurrentPremium() is intentionally rough (intrinsic + decayed time value) — same algorithm as paper-trading-panel.tsx for consistency. The real exit price is computed server-side via Black-Scholes when the user closes the trade.
 - The 12-column md+ grid is carefully balanced: Symbol(2) + Dir(1) + Strategy(3) + 4×detail(1 each) + P&L(2) + R(1, hidden on mobile) + chevron(1) = 12.
+
+---
+Task ID: PERMANENT-DATA-LOSS-FIX
+Agent: Main Agent
+Task: Dashboard not loading. Make permanent solution to avoid data loss on restart. Commit to git.
+
+Work Log:
+- Investigated: Dashboard was timing out (HTTP 000 after 30s) because Turbopack was crashing repeatedly
+- Root cause of data loss: .zscripts/auto-commit.sh was running on container restart and REVERTING all new files using `git checkout HEAD -- "$f"`. This script checked for "missing" critical files and restored them from git — but since our new files (conviction-engine.ts, news/, backup/) weren't in the CRITICAL_FILES list, they were simply deleted.
+- Fixed ecosystem.config.cjs:
+  - Added --webpack flag (Turbopack crashes with "corrupted database" panics, webpack is stable)
+  - Added DATABASE_URL to both processes (points to /home/z/odss-data/custom.db)
+  - Increased memory limit from 512MB to 1024MB (was causing OOM crashes)
+- DISABLED the dangerous auto-commit.sh:
+  - Renamed to auto-commit-DISABLED.sh
+  - This script was the ROOT CAUSE of all data loss on restart
+  - It used `git checkout HEAD` which overwrote new files with old versions
+- Created startup.sh — safe startup script that:
+  - Creates /home/z/odss-data/ directory if missing
+  - Ensures database exists at correct location
+  - Installs mini-service dependencies
+  - Starts PM2 with correct config
+  - Does NOT touch git or revert any files
+- Updated monitor-loop.sh — now only checks PM2 health (no git operations)
+- Deleted and recreated PM2 processes with correct config (--webpack flag)
+- Committed everything to git
+- Verified: Dashboard loads (HTTP 200), LIVE status, NIFTY 24,267.35, all real prices flowing, conviction picks visible
+
+Stage Summary:
+- ROOT CAUSE: auto-commit.sh reverted all new files on container restart using `git checkout HEAD`. Turbopack crashes prevented dashboard from loading.
+- PERMANENT FIX: (1) Disabled auto-commit.sh permanently. (2) Created safe startup.sh that doesn't touch git. (3) Updated monitor-loop.sh to only check PM2 health. (4) Added --webpack flag to ecosystem.config.cjs. (5) Added DATABASE_URL to PM2 env. (6) Committed everything to git.
+- RESULT: Dashboard loads reliably. No more data loss on restart. No more Turbopack crashes. All systems (quotes, state, conviction, news) working.
