@@ -188,15 +188,15 @@ export async function runScan(): Promise<void> {
           active.exitReason = hitSL ? 'Stop loss hit' : exit.action === 'EXIT' ? `Exit score ${exit.exitScore.toFixed(0)}` : mgmt.reason;
           logDecision('WARN', 'StateMachine', `${active.symbol} EXIT: ${active.exitReason}`, active.symbol);
 
-          // AI explanation for exit
-          if (config.enableAIExplanation) {
-            try {
-              const ai = await explainTradeManagement(active, mgmt, exit);
-              active.aiExplanation = ai.summary;
-            } catch (e) {
-              // ignore AI errors
-            }
-          }
+          // AI explanation for exit — DISABLED to prevent 429 rate limiting
+          // The AI explainer calls the LLM on every scan, causing rate limit cascades
+          // Re-enable only when API credits are purchased
+          // if (config.enableAIExplanation) {
+          //   try {
+          //     const ai = await explainTradeManagement(active, mgmt, exit);
+          //     active.aiExplanation = ai.summary;
+          //   } catch (e) {}
+          // }
 
           // Archive to journal
           await archiveTradeToJournal(active);
@@ -208,13 +208,13 @@ export async function runScan(): Promise<void> {
             await db.tradeState.delete({ where: { symbol: active.symbol } });
           } catch {}
         } else {
-          // AI explanation for hold/trail (less frequently)
-          if (config.enableAIExplanation && Math.random() < 0.2) {
-            try {
-              const ai = await explainTradeManagement(active, mgmt, exit);
-              active.aiExplanation = ai.summary;
-            } catch {}
-          }
+          // AI explanation for hold/trail — DISABLED to prevent 429 rate limiting
+          // if (config.enableAIExplanation && Math.random() < 0.2) {
+          //   try {
+          //     const ai = await explainTradeManagement(active, mgmt, exit);
+          //     active.aiExplanation = ai.summary;
+          //   } catch {}
+          // }
           await persistActiveTrade();
         }
       }
@@ -287,15 +287,15 @@ export async function enterTrade(symbol: string, direction: Direction): Promise<
   await persistActiveTrade();
   logDecision('DECISION', 'Orchestrator', `ENTERED ${symbol} ${direction} at ${q.ltp.toFixed(2)}`, symbol);
 
-  // AI explanation for entry
-  const config = await getConfig();
-  if (config.enableAIExplanation) {
-    try {
-      const ai = await explainDecision(rec, 'SELECTED');
-      trade.aiExplanation = ai.summary;
-      await persistActiveTrade();
-    } catch {}
-  }
+  // AI explanation for entry — DISABLED to prevent 429 rate limiting
+  // const config = await getConfig();
+  // if (config.enableAIExplanation) {
+  //   try {
+  //     const ai = await explainDecision(rec, 'SELECTED');
+  //     trade.aiExplanation = ai.summary;
+  //     await persistActiveTrade();
+  //   } catch {}
+  // }
   return trade;
 }
 

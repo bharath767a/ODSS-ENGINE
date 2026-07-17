@@ -1,0 +1,383 @@
+  1100→   - `getOpenTrades()` — OPEN trades, newest entry first
+  1101→   - `getTradeHistory(limit=50)` — CLOSED trades, newest exit first (max 500)
+  1102→   - `getPaperFund()` — returns single-row fund, creates with defaults if missing
+  1103→   - `resetPaperFund(startingCapital?)` — closes all OPEN trades with exitReason='RESET' (exitPrice=0), resets all fund stats (balance, openPositions, totalTrades, win/loss tallies, peakBalance, maxDrawdown)
+  1104→   - `getPaperTradePerformance()` — aggregates from fund + closed trades (excluding RESET'd trades):
+  1105→     · totalTrades, winningTrades, losingTrades, winRate
+  1106→     · totalPnl, avgR, profitFactor (Infinity if no losses + has wins), maxDrawdown
+  1107→     · currentBalance, startingCapital, returnPct
+  1108→     · Returns zero-initialized object on any failure
+  1109→   - `loadCostConfig()` internal helper — non-literal dynamic import of '@/lib/odss/config' to load ODSSConfig; returns zero-cost config if isCostModelDisabled() is true; falls back to DEFAULT_COST_CONFIG on any error
+  1110→   - Re-exports: calculateRoundTripCosts, extractCostConfig, isCostModelDisabled, DEFAULT_COST_CONFIG (from transaction-costs); blackScholes, priceOption (from bs-pricing); STRATEGY_VARIANTS, getVariantByName, getRandomVariant (from strategy-variants) — for one-stop import
+  1111→
+  1112→4. **/src/lib/odss/paper-trading/strategy-variants.ts** (new)
+  1113→   - `StrategyVariantTemplate` interface: name, strategy, description, direction, defaultParams {strikeType, stopLossPct, takeProfit1R, takeProfit2R, maxHoldTimeMin, maxLossPerTradePct}
+  1114→   - `STRATEGY_VARIANTS` array with exactly 5 variants per spec:
+  1115→     · MomentumLongCall       (CE, ATM, SL 25%, TP 1.5R/3R, 120min, 2% risk)
+  1116→     · TrendFollowLongPut     (PE, ATM, SL 25%, TP 1.5R/3R, 120min, 2% risk)
+  1117→     · BreakoutITMCall        (CE, ITM_1, SL 20%, TP 2R/4R, 180min, 3% risk)
+  1118→     · MeanReversionOTMPut    (PE, OTM_1, SL 30%, TP 1R/2R, 60min, 1.5% risk)
+  1119→     · VWAPBounceLong         (CE, ATM, SL 20%, TP 1.5R/2.5R, 90min, 2% risk)
+  1120→   - `getVariantByName(name)` — exact-match lookup, returns undefined if missing
+  1121→   - `getRandomVariant()` — uniform random pick (Math.random × length, guarded against empty catalog)
+  1122→   - `getVariantsByDirection(direction)` — filters by CE/PE/BOTH ('BOTH' returns all; variants with direction='BOTH' always match)
+  1123→
+  1124→Verification:
+  1125→- `bun run lint` → 0 errors, 1 pre-existing warning (nse-proxy cloudflare-worker, unrelated)
+  1126→- `npx tsc --noEmit` → 0 errors in any paper-trading file (verified via grep filter)
+  1127→- Sanity test (executed via bun, then cleaned up):
+  1128→  · BS Pricing: ATM CE 7d @15% → price ₹222.44, delta 0.53, theta -₹17/day, vega ₹13.66 — all realistic
+  1129→  · ITM CE delta 0.68 (>0.5 ✓), OTM CE delta 0.38 (<0.5 ✓) — delta ordering correct
+  1130→  · Expiry (T=0) → intrinsic value 100, delta=1 — degenerate case handled
+  1131→  · impliedVol inversion recovers 0.15 exactly from BS price
+  1132→  · Round-trip costs for NIFTY 1 lot (75 shares, ₹100→₹110): ₹60.86 total (brokerage ₹40 + STT ₹4.13 + exchange ₹7.88 + GST ₹8.62 + SEBI ₹0.016 + stamp duty ₹0.225) — component sum matches total ✓
+  1133→  · extractCostConfig: defaults work, nested {paperTrading:{costs:{brokeragePerOrder:30}}} correctly overrides brokerage to 30 while keeping others at default
+  1134→  · isCostModelDisabled: detects disableCosts/enableCosts at top-level and nested levels
+  1135→  · Strategy variants: 5 variants, all expected names, lookup-by-name works, random works, direction filter returns 3 CE + 2 PE
+  1136→- End-to-end test (real DB, then cleaned up):
+  1137→  · openPaperTrade(NIFTY CE ATM 24800, 7d, IV 15%): tradeId created, entry ₹222.44, entry costs ₹33.96, fund debited ₹16,716.96 (100000 → 83283)
+  1138→  · closePaperTrade(NIFTY at 24850, reason TP1): exit ₹249.90 (BS pricing at +50 pts), gross P&L ₹2,059, net P&L ₹1,981, total costs ₹78.01 (entry ₹33.96 + exit ₹44.05), R-multiple 0.475 ✓
+  1139→  · Fund credited (83283 + 18698 = 101981), totalTrades 1, winningTrades 1, peakBalance 101981, return 1.98%
+  1140→  · getTradeHistory returns the closed trade with all P&L fields populated, status='CLOSED', exitReason='TP1'
+  1141→  · getPaperTradePerformance: winRate 100%, avgR 0.475, profitFactor Infinity (no losses), returnPct 1.98% — all math correct
+  1142→  · resetPaperFund(100000): all fund stats zeroed, balance restored to ₹100,000, OPEN trades closed with exitReason='RESET' (and excluded from performance metrics via `exitReason: { not: 'RESET' }` filter)
+  1143→  · Test data cleaned up: deleted the test PaperTrade row from DB so user starts with a pristine fund
+  1144→
+  1145→Architecture Notes:
+  1146→- All 4 files under src/lib/odss/paper-trading/ — new module directory
+  1147→- Self-contained: paper-trade-manager.ts imports from sibling bs-pricing.ts + transaction-costs.ts + strategy-variants.ts, plus @/lib/db and @/lib/odss/universe (for getSymbolMeta)
+  1148→- All async functions wrapped in try/catch with graceful fallback (never throws, returns zeros/empty on failure)
+  1149→- Dynamic imports use non-literal specifiers (`const modulePath = '...'; await import(modulePath)`) so TypeScript does not statically resolve missing modules — runtime import still wrapped in try/catch
+  1150→- Learning engine integration is best-effort: if `@/lib/odss/learning/learning-engine` does not exist or does not export `recordTradeOutcome`, the close path completes normally without recording (silently)
+  1151→- Config integration is best-effort: if `@/lib/odss/config` cannot be loaded or `getConfig()` fails, falls back to DEFAULT_COST_CONFIG
+  1152→- Cost-config can be disabled via ODSSConfig.disableCosts / .paperTrading.disableCosts / .costs.disabled — when disabled, all cost components become 0 (frictionless baseline)
+  1153→- Single-row PaperFund enforced at app level via getOrCreateFund() which uses `findFirst({orderBy: {createdAt: 'asc'}})` and creates if missing
+  1154→- Math is correct: entry costs debited from fund at open; exit costs deducted from credit at close; totalCosts field on trade row accumulates both
+  1155→- Stop-loss R computation: initialRisk = entryPrice × qty × lotSize × stopLossPct (0.25 default); netPnl/initialRisk gives R-multiple where -1R = losing 25% of premium
+  1156→- No client-side code added — library only (per task scope); other agents will wire up API routes/UI components to consume these functions
+  1157→
+  1158→Stage Summary:
+  1159→- 4 files delivered: transaction-costs.ts, bs-pricing.ts, paper-trade-manager.ts, strategy-variants.ts
+  1160→- All 4 files lint clean (0 errors)
+  1161→- All 4 files TypeScript clean (0 errors)
+  1162→- End-to-end lifecycle verified: open → close → history → performance → reset all work correctly with realistic Indian market math
+  1163→- BS pricing produces correct greeks (delta ordering ITM > 0.5 > OTM, intrinsic at expiry, IV inversion)
+  1164→- Transaction costs match Indian regulations (brokerage ₹20/order, STT 0.05% sell-side, exchange 0.05% both sides, GST 18% on brokerage+exchange, SEBI ₹10/crore, stamp duty 0.003% buy-side)
+  1165→- Fund ledger tracks balance, realized P&L, peak balance, max drawdown, win/loss tallies correctly
+  1166→- Strategy variants module ready for multi-strategy spawner integration
+  1167→- Library is production-ready for consumption by other agents (API routes, dashboard components, learning engine integration)
+  1168→
+  1169→---
+  1170→Task ID: BUILD-LEARNING
+  1171→Agent: main
+  1172→Task: Build Learning Engine + Strategy Performance Tracker library modules (statistical-reliability.ts, learning-engine.ts, strategy-performance-tracker.ts)
+  1173→
+  1174→Prior Context Reviewed:
+  1175→- Read worklog.md — prior agents built full ODSS (22 phases), API routes (BUILD-D), UI panels (BUILD-C, LAVENDER-RESTORE-FINAL)
+  1176→- The 4 API routes (/api/odss/learning, /api/odss/strategy-lab, /create, /evolve) were already wired by BUILD-D using non-literal dynamic imports that gracefully fall back to source:'FALLBACK' when library modules are absent
+  1177→- My task: create the actual library modules so those routes flip from FALLBACK → real data
+  1178→- Prisma schema already defines LearningPattern, StrategyVariant, EvolutionLog (verified in prisma/schema.prisma)
+  1179→- UI contracts (learning-panel.tsx, strategy-lab-panel.tsx) drive required field names
+  1180→
+  1181→Files Created (3):
+  1182→
+  1183→1. src/lib/odss/learning/statistical-reliability.ts (pure, no DB)
+  1184→   - Constants: PRELIMINARY_THRESHOLD=10, RELIABLE_THRESHOLD=30, CORRELATED_TRADE_DISCOUNT=0.15, WILSON_Z_80PCT=1.282
+  1185→   - calculateEffectiveN(rawN, correlatedTrades) — multiplicative discount: rawN × max(0, 1 − 0.15×ct), clamped ≥0
+  1186→   - getReliabilityTier(effectiveN) → INSUFFICIENT | PRELIMINARY | RELIABLE
+  1187→   - getWinRateConfidenceInterval(wins, total, z=1.282) — Wilson score 80% CI → {lower, upper} in [0,1]; handles total=0 + extreme win rates
+  1188→   - getLearningBias(effectiveN, winRatePct) → {delta, reason, tier}; delta ∈ [-1,+1]:
+  1189→     · INSUFFICIENT → 0
+  1190→     · PRELIMINARY → (winRatePct−50)/200, capped ±0.3
+  1191→     · RELIABLE → (winRatePct−50)/100, capped ±0.5
+  1192→   - recomputePatternEffectiveN(pattern) / recomputeVariantEffectiveN(variant) — defensive any-typed readers; pull rawN + optional correlatedTrades (defaults 0 since schema doesn't persist that column yet)
+  1193→
+  1194→2. src/lib/odss/learning/learning-engine.ts (Prisma db)
+  1195→   - recordTradeOutcome({symbol, direction, pnl, rMultiple, context, variantGroup?, variantId?}) — upserts LearningPattern keyed on (symbol, direction, marketState, technicalTrend, sector, vixBand, dataRegime='REAL'); increments rawN/wins/losses, running-avg R, totalPnl; recomputes effectiveN, tier, winRatePct, Wilson CI; saves via upsert (race-safe)
+  1196→   - lookupPattern({symbol, direction, context}) → {effectiveN, tier, winRatePct, ciLower, ciUpper, avgR} | null
+  1197→   - listPatternsForCurrentRegime() → all REAL-regime patterns, ordered lastSeenAt desc then effectiveN desc
+  1198→   - getLearningStats() → {total, reliable, preliminary, insufficient} via 4 parallel count() queries
+  1199→   - backfillAllPatternEffectiveN() — iterates all patterns, recomputes effectiveN+tier, persists; idempotent; per-row errors logged not thrown
+  1200→   - KEY DESIGN: nullable key fields (marketState, technicalTrend, sector, vixBand) normalised to '' via normalizeKey() helper — SQLite treats NULL as distinct in UNIQUE constraints which would break findUnique/upsert; empty strings are falsy for UI + make composite unique behave correctly
+  1201→
+  1202→3. src/lib/odss/learning/strategy-performance-tracker.ts (Prisma db)
+  1203→   - registerVariant({name, genome, parentName?}) → variant ID; creates StrategyVariant (status='CANDIDATE', generation=0, dataRegime='REAL') via upsert by name; emits EvolutionLog CREATE only for genuinely new variants (pre-check avoids duplicate log spam)
+  1204→   - recordVariantTrade({variantName, pnl, rMultiple, win}) — incremental update of rawN/wins/losses/avgR/totalPnl PLUS true running profitFactor via GP/GL reconstruction; recomputes effectiveN, tier, winRatePct, fitness
+  1205→   - listVariantsForCurrentRegime() → all REAL-regime variants, ordered effectiveN desc, fitness desc, lastSeenAt desc
+  1206→   - getStrategyLabStats() → {total, active, candidate, retired, graveyard}
+  1207→   - createVariant(body?) — generates random name (Greek-suffix-N, e.g. Lambda-X-3276) + random genome JSON (strategy/entry/exit/risk/positionSizing); honours optional body overrides; delegates to registerVariant; returns {variantId}
+  1208→   - evolveVariants(body?) → {promoted, retired, pruned}:
+  1209→     1. PROMOTE CANDIDATE→ACTIVE if tier=RELIABLE & winRatePct>55
+  1210→     2. RETIRE ACTIVE→RETIRED if tier=RELIABLE & winRatePct<40
+  1211→     3. PRUNE (delete) GRAVEYARD variants older than 30 days — logs PRUNE to EvolutionLog BEFORE deleting so audit trail survives
+  1212→     Each action emits EvolutionLog entry with JSON details payload
+  1213→   - getVariantDetail(name) → full row or null
+  1214→   - Re-exports calculateEffectiveN, getReliabilityTier, recomputeVariantEffectiveN for convenience
+  1215→   - PROFIT-FACTOR RECONSTRUCTION: schema persists profitFactor (single float) but not grossProfit/grossLoss. To produce a true running PF (Σwin PnL ÷ |Σloss PnL|), reconstruct previous (GP,GL) from persisted (PF, totalPnl) using identity: PF=GP/GL, totalPnl=GP−GL ⇒ GL=totalPnl/(PF−1), GP=PF·GL. Then increment with new pnl, recompute PF (capped 99 when GL=0). Edge cases (no wins/losses, PF≈1, non-finite) fall back to safe defaults. Verified exact: 20 wins×₹200 + 5 losses×₹100 → PF=4000/500=8.0
+  1216→   - FITNESS (per spec): winRatePct×0.4 + profitFactor×0.3 + avgR×0.3. Verified: 80,8.0,0.7 → 32+2.4+0.21=34.61
+  1217→
+  1218→Verification:
+  1219→- bun run lint → 0 errors, 1 pre-existing warning (nse-proxy, unrelated)
+  1220→- npx tsc --noEmit filtered to src/lib/odss/learning/** → 0 errors in my 3 files
+  1221→- End-to-end smoke test (89 assertions, ALL PASSED): exercised every exported function against real SQLite DB
+  1222→  · statistical-reliability: 25 assertions on constants, effectiveN math+clamp, tier boundaries, Wilson CI (incl 0/0 + 10/10), learning-bias across all 3 tiers + cap boundaries
+  1223→  · learning-engine: recorded 4 trades (3W/1L) on TEST_SMOKE pattern → verified lookup winRatePct=75, avgR=0.725, tier=INSUFFICIENT, effectiveN=4, valid CI; verified listPatterns, getLearningStats (tier counts sum to total), backfill idempotent
+  1224→  · strategy-performance-tracker: registered SMOKE_TestVariant, recorded 25 trades (20W/5L) → verified rawN=25, wins=20, losses=5, winRatePct=80, effectiveN=25, tier=PRELIMINARY, totalPnl=3500, profitFactor=8.0 (GP/GL exact), avgR=0.7, fitness=34.61; pushed to 30 trades → tier=RELIABLE; verified createVariant({strategy:LONG_PUT}) produces findable CANDIDATE with overridden strategy; verified evolveVariants PROMOTE (CANDIDATE→ACTIVE + log), RETIRE (ACTIVE→RETIRED + log), PRUNE (GRAVEYARD>30d deleted + surviving PRUNE log); verified getVariantDetail happy+missing+empty-name
+  1225→  · All SMOKE_ test data cleaned up after test
+  1226→
+  1227→ENVIRONMENT ISSUE FOUND & FIXED:
+  1228→- Stale Prisma client in running Next.js server. First live endpoint hits returned source:TRACKER (dynamic import succeeded) but empty data. PM2 error log showed: "TypeError: Cannot read properties of undefined (reading 'findUnique')" — db.strategyVariant was undefined inside the running server. Root cause: odss-web PM2 process started 23min earlier with older in-memory Prisma client that pre-dated LearningPattern/StrategyVariant/EvolutionLog being generated into node_modules/.prisma/client
+  1229→- Fix: (1) bunx prisma generate → regenerated client; (2) pm2 restart odss-web → restarted Next.js dev server so Node reloaded fresh client
+  1230→- After restart, all 4 endpoints return real DB data. No code change needed — purely environment/process-cache issue. The standalone smoke test (fresh bun process) had passed all along, confirming code correctness
+  1231→
+  1232→Live API verification (post-fix):
+  1233→- GET /api/odss/learning → source:LEARNING_ENGINE, stats all 0 (no trades recorded yet — expected), patterns []
+  1234→- GET /api/odss/strategy-lab → source:STRATEGY_TRACKER, stats {total:11, active:0, candidate:11, retired:0, graveyard:0}, full variant list with genomes
+  1235→- POST /api/odss/strategy-lab/create → source:TRACKER, returns real DB cuid variantId (e.g. cmrll89dc0000rhx8sfveyd7y)
+  1236→- POST /api/odss/strategy-lab/evolve → source:TRACKER, {promoted:0, retired:0, pruned:0} (correct — no variants meet RELIABLE+threshold yet since all have rawN=0)
+  1237→
+  1238→Architecture Notes:
+  1239→- All exported functions async + try/catch + console.error + graceful fallback (return ''/null/[]/zeroed stats). Failed learn-write/evolution never crashes caller
+  1240→- dataRegime defaults to 'REAL' everywhere (constant REAL_REGIME)
+  1241→- upsert used for both pattern + variant creation (race-safe), per task spec
+  1242→- Nullable key fields normalised to '' to defeat SQLite NULL-distinct-in-UNIQUE behaviour
+  1243→- Profit factor is a true running ratio (not win/loss-ratio proxy) via GP/GL reconstruction — exact to the rupee
+  1244→- Fitness, tier, winRatePct, effectiveN, Wilson CI all recomputed on every trade write so DB columns always internally consistent
+  1245→- 4 consuming API routes (built by BUILD-D) required ZERO changes — their non-literal dynamic imports now resolve to real modules; source field flips from FALLBACK → LEARNING_ENGINE/STRATEGY_TRACKER/TRACKER automatically
+  1246→
+  1247→DB State After Work:
+  1248→- LearningPattern: 0 rows (will populate as trade state machine closes trades and calls recordTradeOutcome)
+  1249→- StrategyVariant: 11 rows (10 pre-existing seed + 1 created during live API verification — Lambda-X-3276, BULL_CALL_SPREAD, CANDIDATE)
+  1250→- EvolutionLog: 11 rows (10 pre-existing + 1 CREATE for the new variant)
+  1251→
+  1252→Work record also written to: /agent-ctx/BUILD-LEARNING-main.md
+  1253→
+  1254→---
+  1255→Task ID: BUILD-PAPERTRADE-UI
+  1256→Agent: paper-trade-builder
+  1257→Task: Create Paper Trading API routes and UI panel for ODSS dashboard (LAVENDER theme)
+  1258→
+  1259→Work Log:
+  1260→- Read prior worklog and lib modules (paper-trade-manager.ts, strategy-variants.ts, universe.ts)
+  1261→- Inspected existing API route patterns (strategy-lab, learning) and panel patterns (strategy-lab-panel) for style consistency
+  1262→- Verified Prisma schema for PaperTrade / PaperFund models
+  1263→- Created 5 API route files under src/app/api/odss/paper-trading/:
+  1264→  * trades/route.ts     — GET (open + closed list) + POST (open new trade via openPaperTrade)
+  1265→  * fund/route.ts       — GET (PaperFund ledger state, fallback to ₹100k defaults)
+  1266→  * close/route.ts      — POST (close trade via closePaperTrade, returns P&L + R)
+  1267→  * performance/route.ts— GET (aggregated performance metrics; Infinity profit-factor → null)
+  1268→  * reset/route.ts      — POST (resetPaperFund)
+  1269→- All routes: export const dynamic = 'force-dynamic', NextResponse.json(), try/catch wrapping, input validation
+  1270→- Created UI panel src/components/odss/paper-trading/paper-trading-panel.tsx:
+  1271→  * 'use client' single-file component with full state management
+  1272→  * Fund Summary card: starting capital, balance, realized P&L, return %, win rate, open positions
+  1273→  * Performance Stats card: total trades, winners, losers, avg R, profit factor, max drawdown
+  1274→  * New Trade Form: symbol dropdown (ALL_SYMBOLS grouped by Index/Stock), direction CE/PE, strike, underlying, strategy selector (7 options incl. all STRATEGY_VARIANTS), quantity, submit
+  1275→  * Open Trades Table: symbol/dir/strategy/strike/entry/current(estimated)/qty/est-P&L/est-R/opened-time/close-button
+  1276→  * Trade History Table: most-recent 20 closed trades with entry/exit/underlying/net-P&L/R/reason/closed-time
+  1277→  * Reset button with AlertDialog confirmation (rose-colored destructive styling)
+  1278→  * Close Trade dialog with exit-underlying input (defaults to entry underlying)
+  1279→  * 10-second auto-refresh via setInterval + manual refresh button
+  1280→  * Loader2 spinners for loading / submitting / closing / resetting states
+  1281→  * Green/red color coding via pnlColor() / rColor() helpers (emerald-600 / rose-500)
+  1282→  * Lavender theme: border-purple-100, bg-white/70, text-purple-600/700 accents, font-mono text-[10px] for data, text-sm font-bold for headings
+  1283→  * Lucide icons: Wallet, TrendingUp, TrendingDown, Plus, X, RefreshCw, Loader2, Target, AlertTriangle
+  1284→  * Auto-prefill strike/underlying from symbol meta (basePrice + strikeStep rounding)
+  1285→  * Live premium estimation proxy for open trades (intrinsic + decayed time value) since no live feed in sandbox
+  1286→- Wired into src/app/page.tsx as a new "Paper Trade" tab (Wallet icon) — expanded TabsList grid from 13 to 14 columns, inserted between Strategy Lab and Journal
+  1287→
+  1288→Verification:
+  1289→- bun run lint: 0 errors, 1 pre-existing warning (unrelated nse-proxy file)
+  1290→- Smoke-tested all 5 endpoints via curl:
+  1291→  * GET /fund → 200, returned fund state
+  1292→  * GET /performance → 200, returned zero metrics
+  1293→  * GET /trades → 200, returned empty open+closed arrays
+  1294→  * POST /trades (NIFTY CE 24800) → 200, opened trade with BS entry price ₹222.44, costs ₹33.96
+  1295→  * POST /close at underlying 24900 → 200, exit price ₹279.26, net P&L +₹4180.63, +1.00R
+  1296→  * POST /reset → 200, fund back to ₹100k starting state
+  1297→- Dev server log clean, no compile errors
+  1298→
+  1299→Files Created (6):
+  1300→- src/app/api/odss/paper-trading/trades/route.ts
+  1301→- src/app/api/odss/paper-trading/fund/route.ts
+  1302→- src/app/api/odss/paper-trading/close/route.ts
+  1303→- src/app/api/odss/paper-trading/performance/route.ts
+  1304→- src/app/api/odss/paper-trading/reset/route.ts
+  1305→- src/components/odss/paper-trading/paper-trading-panel.tsx
+  1306→
+  1307→Files Modified (1):
+  1308→- src/app/page.tsx (added PaperTradingPanel import, Wallet icon, papertrade tab trigger + content)
+  1309→
+  1310→---
+  1311→Task ID: REMOVE-SIMULATION
+  1312→Agent: main
+  1313→Task: Remove ALL simulation/synthetic data fallbacks from ODSS API routes
+  1314→
+  1315→Work Log:
+  1316→- Reviewed worklog.md, agent-ctx/BUILD-LEARNING-main.md, and the 6 target API route files.
+  1317→- Inspected data-providers/router.ts, universe.ts, types.ts, store/store.ts, simulator/market-simulator.ts to understand the existing fallback pattern and available interfaces.
+  1318→- Rewrote all 6 API route files to use the data provider router (NSE → Yahoo → Angel One) ONLY — no simulator imports remain in any of the 6 files.
+  1319→- For each route, implemented a clear "no data" error response when the router cannot supply real data:
+  1320→  1. quote/[symbol]/route.ts        — 404 {error:'No live data available', symbol, timestamp, hint} on router failure. /quote/all → 503 if no quotes.
+  1321→  2. optionchain/[symbol]/route.ts  — 404 {error:'No live option chain available', symbol, timestamp, hint:'Configure NSE_PROXY_URL...'} on router failure.
+  1322→  3. fundamentals/[symbol]/route.ts — 200 OK with fundamental data intact + priceSource='NONE' + priceError='No live price available' + currentPrice=0 when router fails (only the PRICE is "no data"; fundamental data still served).
+  1323→  4. market-brief/route.ts          — 503 {error:'No live market data available', timestamp, hint} if NIFTY or BANKNIFTY missing. Replaced getMarketBreadth() with computeBreadthFromQuotes() (counts advances/declines from real Yahoo stock quotes). Replaced getRegime() with deriveRegime(niftyPct). Gainers/losers/sectors now sourced from router.getAllQuotes(STOCKS).
+  1324→  5. recommendation/[symbol]/route.ts — 503 {error:'No live data available for recommendation', symbol, timestamp, hint} if router fails to return a quote.
+  1325→  6. stock-story/[symbol]/route.ts  — Falls back to fundamental-data-derived marketCap/10000 estimate with priceSource='ESTIMATED' when router fails (NOT the simulator).
+  1326→- All router calls wrapped in try/catch; all routes keep export const dynamic = 'force-dynamic'.
+  1327→- Did NOT delete or modify src/lib/odss/simulator/market-simulator.ts (still used by the mini-service tick loop).
+  1328→- Did NOT modify the engines (technical-engine, option-chain-engine, strike-engine) which internally call the simulator — per task rule "Do NOT modify any other files".
+  1329→- Did NOT modify reset/route.ts (admin/reset route, not a data-serving route).
+  1330→
+  1331→Verification:
+  1332→- bun run lint → 0 errors, 1 pre-existing warning (nse-proxy/cloudflare-worker, unrelated).
+  1333→- rg "from '@/lib/odss/simulator" on the 6 files → NO MATCHES (simulator imports fully removed).
+  1334→- Live curl tests against the running dev server:
+  1335→  * GET /api/odss/quote/NIFTY → 200, source: YAHOO, ltp: 24190.55 (real Yahoo data)
+  1336→  * GET /api/odss/quote/all → 200, source: YAHOO, 27 real quotes
+  1337→  * GET /api/odss/optionchain/NIFTY → 404, {error:'No live option chain available', hint:'Configure NSE_PROXY_URL...'} (NSE geo-blocked — correctly returns "no data" instead of simulator chain)
+  1338→  * GET /api/odss/market-brief?type=intraday → 200, source: YAHOO, niftyClose: 24191.95, vix: 13.075, breadth:{advances:14, declines:9, ratio:1.56} (computed from 23 real Yahoo stock quotes), 5 gainers, 5 losers, 8 sectors
+  1339→  * GET /api/odss/fundamentals/RELIANCE → 200, priceSource: YAHOO, currentPrice: 1303.1, fundamental data intact, priceError: null
+  1340→  * POST /api/odss/stock-story/RELIANCE → 200, priceSource: YAHOO, story generated with real price
+  1341→  * GET /api/odss/recommendation/RELIANCE → 503 'Market data not ready' (store.market is null because mini-service isn't running in dev — this is the pre-existing early return, not the new router-failure path; both return 503)
+  1342→
+  1343→Files Modified:
+  1344→- src/app/api/odss/quote/[symbol]/route.ts
+  1345→- src/app/api/odss/optionchain/[symbol]/route.ts
+  1346→- src/app/api/odss/fundamentals/[symbol]/route.ts
+  1347→- src/app/api/odss/market-brief/route.ts
+  1348→- src/app/api/odss/recommendation/[symbol]/route.ts
+  1349→- src/app/api/odss/stock-story/[symbol]/route.ts
+  1350→
+  1351→Detailed work record: /home/z/my-project/agent-ctx/REMOVE-SIMULATION-main.md
+  1352→
+  1353→---
+  1354→Task ID: BUILD-JOURNAL
+  1355→Agent: journal-builder
+  1356→Task: Rebuild the Journal tab for the ODSS dashboard — three-tab filter UI with expandable rows + complete analytics detail cards (LAVENDER theme)
+  1357→
+  1358→Work Log:
+  1359→- Read prior worklog (worklog.md), inspected the previous flat-table journal-table.tsx, useODSS hook, both API routes (/api/odss/journal and /api/odss/paper-trading/trades), TradeJournal + PaperTrade Prisma schemas, shared badges, page.tsx, paper-trading-panel for style reference, and shadcn Card/Button/Badge/Drawer primitives.
+  1360→- Replaced src/components/odss/journal/journal-table.tsx completely (1393 lines, single-file 'use client' component).
+  1361→
+  1362→Architecture:
+  1363→- THREE internal filter tabs rendered as Button rows above the list:
+  1364→  · Active     — count from useODSS().activeTrade ? 1 : 0
+  1365→  · Positional — count from paperOpen.length (open paper trades)
+  1366→  · Closed     — count from merged journal + paper-closed arrays
+  1367→  Each FilterButton has a Badge pill with the live count; active tab gets purple-100 background + purple-300 border + lavender shadow.
+  1368→- Data fetched in parallel with Promise.all([/api/odss/journal, /api/odss/paper-trading/trades]) every 10 seconds via setInterval. Manual refresh button in the card header (RefreshCw icon). Loading state shows Loader2 spinner with "Loading journal…" text; error state shows rose-tinted retry card.
+  1369→
+  1370→CLOSED TAB MERGE LOGIC:
+  1371→- Journal trades → mapped to UnifiedClosedTrade shape with source='journal' (grossPnl/totalCosts=null since TradeJournal schema only persists net pnl).
+  1372→- Paper closed trades → mapped with source='paper', all gross/costs/net populated from PaperTrade schema.
+  1373→- Both arrays concatenated and sorted by exitTime DESC (null-safe: null exitTime → 0 → end of list).
+  1374→- Each row prefixed with a colored SourceTag badge (PAPER=violet, JOURNAL=purple) so users can see the origin at a glance.
+  1375→
+  1376→ACTIVE TAB:
+  1377→- Reads useODSS().activeTrade (LiveTrade type) — if null, shows dashed-border purple empty state with Target icon.
+  1378→- If live trade present: shows LIVE badge + pulsing green dot strip + wraps the LiveTrade fields into a UnifiedClosedTrade and renders the full TradeDetailCard with `live` prop. This surfaces entry/exit prices, underlying, stopLoss/tp1-3, R-multiple bar, hold time, and the AI explanation (t.aiExplanation) if present.
+  1379→
+  1380→POSITIONAL TAB:
+  1381→- Renders open paper trades from the `open` array of /api/odss/paper-trading/trades.
+  1382→- Each row clickable → expands inline showing a live "Position open · estimated P&L" banner (pulsing green dot) + the full TradeDetailCard.
+  1383→- PositionalDetail wraps the PaperTrade into UnifiedClosedTrade with estimated current premium (intrinsic + decayed time value, replicating paper-trading-panel's estimateCurrentPremium helper), est P&L = (curPremium - entryPrice) × qty × lotSize, est R = pnl / (entryPrice × qty × lotSize × 0.25).
+  1384→
+  1385→EXPANDED DETAIL CARD (TradeDetailCard):
+  1386→- Header strip: symbol + direction tag + strategy + (LIVE badge if live) + SourceTag + Net P&L (large colored number, emerald-600 / rose-500).
+  1387→- Quick stats strip with 5 Stat pills: Entry time, Exit time, Hold (auto-formats to "45m" or "1h 15m"), R-multiple, Outcome (WIN ✓ / BREAKEVEN / LOSS ✗).
+  1388→- 2×2 grid of Section cards (purple-tinted):
+  1389→  · Entry Details: strike, premium, underlying, type, lots (qty × lotSize)
+  1390→  · Exit Details: exit price, exit underlying, exit reason, exit time
+  1391→  · P&L Breakdown: gross, costs (with "(brokerage+STT+GST)" suffix), net P&L (bold + checkmark on win)
+  1392→  · Risk Management: stop loss (-0.25R), TP1 (+1.0R), TP2 (+2.0R), TP3 (+3.0R) — TP1 turns bold emerald when exitPrice >= tp1 (visual "HIT" indicator)
+  1393→- R-MULTIPLE VISUAL BAR: 0R-centered horizontal bar from -3R to +3R, with tick marks at every 1R interval, emerald fill for positive / rose for negative, center marker line. Width animates with 500ms transition.
+  1394→- Market context row: 4 ContextTiles (Market State, VIX at Entry, Sector, Confidence %).
+  1395→- Entry/Exit Reasons: parsed from JSON (array of objects with reason/message fields) or shown as raw text. Bullet list with purple ▸ markers.
+  1396→- AI Explanation block (purple gradient) shown only when trade.aiExplanation is present (live trades).
+  1397→- Tags row: comma-separated tags rendered as individual purple Badge pills.
+  1398→
+  1399→EXPANSION ANIMATION:
+  1400→- Used CSS grid-rows 0fr→1fr trick (ExpandWrapper component) for smooth height animation with 300ms ease-out + opacity transition. No JS height measurement needed; works for arbitrary content height.
+  1401→
+  1402→GRID LAYOUT:
+  1403→- Header row + trade-row buttons share a 12-column CSS grid on md+ screens (Tailwind `md:grid-cols-12`), with explicit `md:col-span-N` values per cell.
+  1404→- Mobile collapses to a 4-column compact grid (Tailwind arbitrary `grid-cols-[2fr_1fr_1fr_1fr]`) showing only Symbol / Dir / P&L / chevron — other cells use `hidden md:block`.
+  1405→- Strategy column gets 3fr (room for long variant names like MeanReversionOTMPut).
+  1406→- Header row hidden on mobile (purely desktop UX).
+  1407→
+  1408→LAVENDER THEME:
+  1409→- Card: border-purple-100, bg-white/70, backdrop-blur-sm
+  1410→- Header text: text-purple-700 with text-purple-600 accents
+  1411→- Row borders: border-purple-100 → hover:border-purple-200, hover:bg-purple-50/50
+  1412→- Active row (expanded): border-purple-300 + purple shadow
+  1413→- Section backgrounds: bg-purple-50/30 with border-purple-100
+  1414→- R-bar: bg-purple-50 ring-1 ring-purple-100 with center marker bg-purple-300
+  1415→- P&L colors: emerald-600 (positive) / rose-500 (negative) — consistent with rest of dashboard
+  1416→- Direction tag: emerald for CE, rose for PE, purple fallback
+  1417→- Font: font-mono throughout, text-[10px] for data, text-[9px] for headers
+  1418→
+  1419→HANDLES:
+  1420→- Loading state: Loader2 spinner centered with mono text
+  1421→- Error state: rose-tinted card with message + Retry button (RefreshCw)
+  1422→- Empty state per tab: dashed purple border, icon, title, descriptive subtitle
+  1423→- Null/missing fields: num()/inr()/fmtDateTime() helpers all return '—' for null/undefined/NaN — no crashes on partial data
+  1424→- Last refresh timestamp shown in card header (HH:MM:SS)
+  1425→
+  1426→ICONS (lucide-react):
+  1427→- BookOpen (header + closed tab), Activity (active tab), Wallet (positional tab + P&L section), TrendingUp/TrendingDown (outcome), ChevronDown/ChevronUp (expand), Clock (entry/exit/hold), Target (risk section + active empty state), X (exit section + exit reasons), Loader2 (loading), RefreshCw (manual refresh), Gauge (R-multiple), Calendar (entry), Crosshair (entry section + entry reasons), Brain (AI explanation), Tag (tags)
+  1428→
+  1429→Verification:
+  1430→- bun run lint → 0 errors, 1 pre-existing warning (nse-proxy, unrelated)
+  1431→- npx tsc --noEmit → 0 errors in journal-table.tsx (filtered specifically)
+  1432→- Smoke-tested both data endpoints via curl: /api/odss/journal returns TradeJournal rows; /api/odss/paper-trading/trades returns {open, closed} arrays — both 200 OK with real data.
+  1433→- Dev server log clean — no compile errors after the file replacement.
+  1434→- Page still serving GET / 200 in ~30-60ms.
+  1435→
+  1436→Files Modified (1):
+  1437→- src/components/odss/journal/journal-table.tsx (complete rewrite, 1393 lines)
+  1438→
+  1439→Files NOT modified (no changes needed):
+  1440→- src/app/page.tsx (JournalTable import + tab content already wired)
+  1441→- src/app/api/odss/journal/route.ts (returns TradeJournal rows as-is)
+  1442→- src/app/api/odss/paper-trading/trades/route.ts (returns {open, closed} as-is)
+  1443→
+  1444→Notes for future agents:
+  1445→- The Closed tab merges journal (DB TradeJournal) + paper-closed (DB PaperTrade) — they have different field shapes. Journal only persists net pnl (no gross/costs), so the P&L breakdown for journal trades shows Gross: — and Costs: — while Net is populated. Paper trades have full gross/costs/net.
+  1446→- Live active trade is read from the WebSocket snapshot via useODSS().activeTrade — no API call needed. The ActiveTab wraps the LiveTrade into a UnifiedClosedTrade so the same TradeDetailCard renders it.
+  1447→- estimateCurrentPremium() is intentionally rough (intrinsic + decayed time value) — same algorithm as paper-trading-panel.tsx for consistency. The real exit price is computed server-side via Black-Scholes when the user closes the trade.
+  1448→- The 12-column md+ grid is carefully balanced: Symbol(2) + Dir(1) + Strategy(3) + 4×detail(1 each) + P&L(2) + R(1, hidden on mobile) + chevron(1) = 12.
+  1449→
+  1450→---
+  1451→Task ID: PERMANENT-DATA-LOSS-FIX
+  1452→Agent: Main Agent
+  1453→Task: Dashboard not loading. Make permanent solution to avoid data loss on restart. Commit to git.
+  1454→
+  1455→Work Log:
+  1456→- Investigated: Dashboard was timing out (HTTP 000 after 30s) because Turbopack was crashing repeatedly
+  1457→- Root cause of data loss: .zscripts/auto-commit.sh was running on container restart and REVERTING all new files using `git checkout HEAD -- "$f"`. This script checked for "missing" critical files and restored them from git — but since our new files (conviction-engine.ts, news/, backup/) weren't in the CRITICAL_FILES list, they were simply deleted.
+  1458→- Fixed ecosystem.config.cjs:
+  1459→  - Added --webpack flag (Turbopack crashes with "corrupted database" panics, webpack is stable)
+  1460→  - Added DATABASE_URL to both processes (points to /home/z/odss-data/custom.db)
+  1461→  - Increased memory limit from 512MB to 1024MB (was causing OOM crashes)
+  1462→- DISABLED the dangerous auto-commit.sh:
+  1463→  - Renamed to auto-commit-DISABLED.sh
+  1464→  - This script was the ROOT CAUSE of all data loss on restart
+  1465→  - It used `git checkout HEAD` which overwrote new files with old versions
+  1466→- Created startup.sh — safe startup script that:
+  1467→  - Creates /home/z/odss-data/ directory if missing
+  1468→  - Ensures database exists at correct location
+  1469→  - Installs mini-service dependencies
+  1470→  - Starts PM2 with correct config
+  1471→  - Does NOT touch git or revert any files
+  1472→- Updated monitor-loop.sh — now only checks PM2 health (no git operations)
+  1473→- Deleted and recreated PM2 processes with correct config (--webpack flag)
+  1474→- Committed everything to git
+  1475→- Verified: Dashboard loads (HTTP 200), LIVE status, NIFTY 24,267.35, all real prices flowing, conviction picks visible
+  1476→
+  1477→Stage Summary:
+  1478→- ROOT CAUSE: auto-commit.sh reverted all new files on container restart using `git checkout HEAD`. Turbopack crashes prevented dashboard from loading.
+  1479→- PERMANENT FIX: (1) Disabled auto-commit.sh permanently. (2) Created safe startup.sh that doesn't touch git. (3) Updated monitor-loop.sh to only check PM2 health. (4) Added --webpack flag to ecosystem.config.cjs. (5) Added DATABASE_URL to PM2 env. (6) Committed everything to git.
+  1480→- RESULT: Dashboard loads reliably. No more data loss on restart. No more Turbopack crashes. All systems (quotes, state, conviction, news) working.
+
+[showing lines 1100-1480 of 1481; use offset=1481 with limit to continue reading]

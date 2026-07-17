@@ -107,7 +107,11 @@ const LLM_CACHE_MS = 5 * 60_000;
 const llmCache = new Map<string, { summary: string; prediction: string; ts: number }>();
 const lastGoodBrief = new Map<string, { response: any; ts: number }>();
 
+let llmCooldownUntil = 0;
+
 async function callLLM(prompt: string): Promise<string | null> {
+  // Respect cooldown — don't call LLM if we're rate-limited
+  if (Date.now() < llmCooldownUntil) return null;
   try {
     const ZAI = (await import('z-ai-web-dev-sdk')).default;
     const zai = await ZAI.create();
@@ -123,7 +127,11 @@ async function callLLM(prompt: string): Promise<string | null> {
       thinking: { type: 'disabled' },
     });
     return completion.choices[0]?.message?.content ?? null;
-  } catch {
+  } catch (e) {
+    const msg = (e as Error)?.message ?? '';
+    if (msg.includes('429') || msg.includes('Too many requests') || msg.includes('500')) {
+      llmCooldownUntil = Date.now() + 5 * 60_000; // 5-minute cooldown
+    }
     return null;
   }
 }

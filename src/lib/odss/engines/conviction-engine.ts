@@ -206,6 +206,18 @@ export function runConvictionEngine(
 
   // Step 3: Update conviction set with HYSTERESIS + DWELL TIME + MAX SIZE
   const MAX_CONVICTION_SET_SIZE = 5; // only keep top 5 in the conviction set
+
+  // First: demote any symbols in the conviction set that are NOT in the current top 15
+  // (They dropped out of the opportunity list entirely — must be removed)
+  for (const symbol of Array.from(convictionSet)) {
+    if (!allPicksMap.has(symbol)) {
+      convictionSet.delete(symbol);
+      convictionOrder = convictionOrder.filter(s => s !== symbol);
+      convictionDwell.delete(symbol);
+    }
+  }
+
+  // Then: process all current picks for promotion/demotion
   for (const [symbol, pick] of allPicksMap) {
     const isInSet = convictionSet.has(symbol);
     const consec = pick.consecutiveTop10;
@@ -225,12 +237,6 @@ export function runConvictionEngine(
         convictionOrder = convictionOrder.filter(s => s !== symbol);
         convictionDwell.delete(symbol);
       }
-    }
-    // If in set but not in current allPicksMap (dropped out of top 15), demote
-    if (isInSet && !allPicksMap.has(symbol)) {
-      convictionSet.delete(symbol);
-      convictionOrder = convictionOrder.filter(s => s !== symbol);
-      convictionDwell.delete(symbol);
     }
   }
 
