@@ -265,7 +265,7 @@ class DhanClient:
                     max_put_oi = put_oi
                     max_put_strike = float(s.get("strike", 0))
 
-            pcr = total_call_oi > 0 ? total_put_oi / total_call_oi : 1.0
+            pcr = (total_put_oi / total_call_oi) if total_call_oi > 0 else 1.0
 
             # Max pain calculation
             max_pain_strike = 0
