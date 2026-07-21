@@ -327,6 +327,8 @@ setInterval(async () => {
         conviction: store.conviction,
         activeTrade: store.activeTrade,
         topRecommendations: Array.from(store.recommendations.values()).slice(0, 10),
+        smartMoney: (store as any).smartMoney || null,
+        squeezes: (store as any).squeezes || [],
         decisionLog: store.decisionLog.slice(0, 50),
         completedTrades: store.completedTrades.slice(0, 20),
         lastScanAt: store.lastScanAt,
@@ -343,6 +345,8 @@ setInterval(async () => {
       conviction: store.conviction,
       activeTrade: store.activeTrade,
       topRecommendations: Array.from(store.recommendations.values()).slice(0, 10),
+        smartMoney: (store as any).smartMoney || null,
+        squeezes: (store as any).squeezes || [],
       decisionLog: store.decisionLog.slice(0, 20),
       recording: isRecording(),
     });
@@ -388,6 +392,8 @@ io.on('connection', (socket) => {
     opportunities: store.opportunities,
     activeTrade: store.activeTrade,
     topRecommendations: Array.from(store.recommendations.values()).slice(0, 10),
+        smartMoney: (store as any).smartMoney || null,
+        squeezes: (store as any).squeezes || [],
     decisionLog: store.decisionLog.slice(0, 30),
   });
 
@@ -408,6 +414,8 @@ io.on('connection', (socket) => {
         opportunities: s.opportunities,
         activeTrade: s.activeTrade,
         topRecommendations: Array.from(s.recommendations.values()).slice(0, 10),
+        smartMoney: (s as any).smartMoney || null,
+        squeezes: (s as any).squeezes || [],
         decisionLog: s.decisionLog.slice(0, 20),
       });
     } catch (e) {
@@ -557,6 +565,8 @@ function broadcastUpdate() {
     opportunities: s.opportunities,
     activeTrade: s.activeTrade,
     topRecommendations: Array.from(s.recommendations.values()).slice(0, 10),
+        smartMoney: (s as any).smartMoney || null,
+        squeezes: (s as any).squeezes || [],
     decisionLog: s.decisionLog.slice(0, 20),
   });
 }

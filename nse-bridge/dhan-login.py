@@ -1,32 +1,33 @@
 #!/usr/bin/env python3
 """
-Dhan Access Token Generator
-============================
-Run this on the SANDBOX (cloud) terminal every morning before market open.
-It generates a fresh access token valid for 24 hours.
+Dhan Access Token Generator (for your India laptop)
+====================================================
+Run this EVERY MORNING before market open to generate a fresh access token.
 
 PREREQUISITE:
-  1. You created /home/z/odss-data/dhan-config.json with your API key + secret
-  2. You have your Dhan Client ID ready
+  1. You have dhan-creds.json with your API key + secret
+  2. You have Python + requests installed (pip install requests)
 
 USAGE:
-  python3 /home/z/my-project/nse-bridge/dhan-login.py
+  cd C:\\nse-bridge
+  python dhan-login.py
 
 WHAT IT DOES:
-  1. Reads your API key + secret from dhan-config.json
+  1. Reads your API key + secret from dhan-creds.json
   2. Opens the Dhan login URL in your browser
   3. You login with your Dhan credentials
   4. Copy the redirect URL back here
-  5. Script extracts the auth code + exchanges for access token
-  6. Saves access token to dhan-config.json (valid 24 hours)
+  5. Script exchanges auth code for access token
+  6. Saves access token to dhan-creds.json (valid 24 hours)
 """
 import json
 import requests
 import webbrowser
 import urllib.parse
 from datetime import datetime
+import os
 
-CONFIG_FILE = '/home/z/odss-data/dhan-config.json'
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dhan-creds.json')
 
 def load_config():
     try:
@@ -34,7 +35,8 @@ def load_config():
             return json.load(f)
     except FileNotFoundError:
         print(f"ERROR: {CONFIG_FILE} not found.")
-        print("Create it first with your API key + secret (see instructions).")
+        print("Create it first with your API key + secret.")
+        print('Format: {"clientId":"123","apiKey":"xxx","apiSecret":"xxx","accessToken":""}')
         return None
     except Exception as e:
         print(f"Error reading config: {e}")
@@ -59,15 +61,15 @@ def main():
     client_id = config.get('clientId', '')
 
     if not api_key or not api_secret:
-        print("ERROR: apiKey and apiSecret must be in dhan-config.json")
-        print('Format: {"clientId": "123456", "apiKey": "xxx", "apiSecret": "xxx"}')
+        print("ERROR: apiKey and apiSecret must be in dhan-creds.json")
+        print('Format: {"clientId":"123","apiKey":"xxx","apiSecret":"xxx","accessToken":""}')
         return
 
     print(f"Client ID: {client_id}")
-    print(f"API Key:   {api_key[:8]}...{api_key[-4:]}")
+    print(f"API Key:   {api_key[:8]}...{api_key[-4:]}" if len(api_key) > 12 else f"API Key: {api_key}")
     print()
 
-    # Step 1: Build the OAuth URL
+    # Build OAuth URL
     redirect_uri = "https://127.0.0.1/"
     auth_url = f"https://api.dhan.in/oauth/authorize?client_id={api_key}&redirect_uri={urllib.parse.quote(redirect_uri)}&response_type=code"
 
@@ -77,14 +79,15 @@ def main():
     try:
         webbrowser.open(auth_url)
     except:
-        pass
+        print("Could not auto-open browser. Copy the URL above into your browser.")
 
     print("STEP 2: Login with your Dhan credentials in the browser.")
     print("        After login, you'll be redirected to a URL like:")
     print("        https://127.0.0.1/?code=AUTHORIZATION_CODE")
+    print("        (The page will say 'This site can't be reached' — that's OK!)")
     print()
 
-    # Step 2: Get the redirect URL from user
+    # Get redirect URL from user
     redirect_url = input("STEP 3: Paste the FULL redirect URL here:\n> ").strip()
 
     if not redirect_url:
@@ -104,7 +107,7 @@ def main():
     print(f"\nExtracted auth code: {auth_code[:10]}...")
     print()
 
-    # Step 3: Exchange auth code for access token
+    # Exchange auth code for access token
     print("STEP 4: Exchanging auth code for access token...")
 
     token_url = "https://api.dhan.in/oauth/token"
@@ -133,19 +136,18 @@ def main():
         # Save to config
         config['accessToken'] = access_token
         config['tokenGeneratedAt'] = datetime.now().isoformat()
-        config['tokenExpiresAt'] = token_response.get('expires_in', '86400')
         save_config(config)
 
         print()
         print("=" * 60)
-        print("  SUCCESS! Access token saved to dhan-config.json")
+        print("  SUCCESS! Access token saved to dhan-creds.json")
         print("=" * 60)
         print(f"  Token: {access_token[:10]}...{access_token[-4:]}")
         print(f"  Valid: 24 hours")
         print(f"  File:  {CONFIG_FILE}")
         print()
-        print("  The engine will automatically use this token for market data.")
-        print("  Run this script again tomorrow morning for a fresh token.")
+        print("  Now restart the bridge:")
+        print("    python bridge_server_v4.py")
         print("=" * 60)
 
     except Exception as e:
