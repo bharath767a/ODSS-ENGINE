@@ -116,132 +116,66 @@ async function fetchAndInjectRealData() {
   console.log('[odss-market] fetchAndInjectRealData: starting...');
   try {
     const router = getDataRouter();
-    // Use BRIDGE provider first (routes through Dhan on user's laptop)
-    const bridgeProvider = router.getProvider('BRIDGE' as any);
+    // Use YAHOO for quotes (most reliable), BRIDGE for option chains only
+    // This ensures real prices always flow even if bridge/ngrok goes down
     const yahooProvider = router.getProvider('YAHOO');
-    if (!yahooProvider && !bridgeProvider) {
-      console.warn('[odss-market] No data providers available');
+    if (!yahooProvider) {
+      console.warn('[odss-market] Yahoo provider not available');
       return;
     }
+    console.log('[odss-market] Using YAHOO for quotes, BRIDGE for option chains...');
 
-    const useBridge = !!bridgeProvider?.isConfigured();
-    const quoteProvider = useBridge ? bridgeProvider! : yahooProvider;
-    const providerName = useBridge ? 'BRIDGE' : 'YAHOO';
-    console.log(`[odss-market] Using ${providerName} provider for quotes...`);
-
-    // Fetch India VIX first (always from Yahoo — bridge doesn't expose VIX directly)
+    // Fetch India VIX
     try {
-      if (yahooProvider) {
-        const vix = await yahooProvider.getIndiaVIX();
-        console.log(`[odss-market] VIX: ${vix} from YAHOO`);
-        if (vix > 0 && vix < 200) {
-          injectRealVix(vix);
-          if (!useBridge) realDataStats.source = 'YAHOO';
-        }
+      const vix = await yahooProvider.getIndiaVIX();
+      console.log(`[odss-market] VIX: ${vix} from YAHOO`);
+      if (vix > 0 && vix < 200) {
+        injectRealVix(vix);
+        realDataStats.source = 'YAHOO';
       }
     } catch (e) {
       console.warn('[odss-market] VIX fetch failed:', (e as Error).message);
     }
 
-    // Fetch quotes — use batch endpoint if bridge (Dhan supports 50 symbols/call)
+    // Fetch ALL quotes via Yahoo (batch of 5, reliable)
     let fetched = 0;
-    let bridgeFailed = 0;
+    const BATCH_SIZE = 5;
+    const BATCH_DELAY = 200;
 
-    if (useBridge) {
-      // Bridge supports batch quotes — fetch all 93 symbols in 2 batches
-      const BATCH = 50;
-      for (let i = 0; i < REAL_DATA_SYMBOLS.length; i += BATCH) {
-        const batch = REAL_DATA_SYMBOLS.slice(i, i + BATCH);
-        try {
-          const quotesMap = await quoteProvider.getAllQuotes(batch);
-          for (const [sym, q] of quotesMap.entries()) {
-            if (q && q.ltp > 0) {
-              injectRealQuote(sym, {
-                ltp: q.ltp,
-                prevClose: q.prevClose,
-                open: q.open,
-                high: q.high,
-                low: q.low,
-                volume: q.volume,
-                changePct: q.changePct,
-                vwap: q.vwap,
-              });
-              fetched++;
-            }
+    for (let i = 0; i < REAL_DATA_SYMBOLS.length; i += BATCH_SIZE) {
+      const batch = REAL_DATA_SYMBOLS.slice(i, i + BATCH_SIZE);
+      const results = await Promise.allSettled(
+        batch.map(async (sym) => {
+          const q = await yahooProvider.getQuote(sym);
+          if (q && q.ltp > 0) {
+            injectRealQuote(sym, {
+              ltp: q.ltp,
+              prevClose: q.prevClose,
+              open: q.open,
+              high: q.high,
+              low: q.low,
+              volume: q.volume,
+              changePct: q.changePct,
+              vwap: q.vwap,
+            });
+            return sym;
           }
-        } catch (e) {
-          console.warn(`[odss-market] Bridge batch failed:`, (e as Error).message);
-        }
+          return null;
+        }),
+      );
+      for (const r of results) {
+        if (r.status === 'fulfilled' && r.value) fetched++;
       }
-
-      // Fetch any missing symbols individually via Yahoo fallback
-      const missing = REAL_DATA_SYMBOLS.filter(sym => {
-        const q = getQuote(sym);
-        return !q || q.ltp <= 0;
-      });
-      if (missing.length > 0 && yahooProvider) {
-        console.log(`[odss-market] Fetching ${missing.length} missing symbols from Yahoo fallback...`);
-        for (const sym of missing.slice(0, 20)) {
-          try {
-            const q = await yahooProvider.getQuote(sym);
-            if (q && q.ltp > 0) {
-              injectRealQuote(sym, {
-                ltp: q.ltp, prevClose: q.prevClose, open: q.open,
-                high: q.high, low: q.low, volume: q.volume,
-                changePct: q.changePct, vwap: q.vwap,
-              });
-              bridgeFailed++;
-            }
-          } catch {}
-        }
-      }
-    } else {
-      // Yahoo fallback — fetch in batches of 5
-      const BATCH_SIZE = 5;
-      const BATCH_DELAY = 200;
-      for (let i = 0; i < REAL_DATA_SYMBOLS.length; i += BATCH_SIZE) {
-        const batch = REAL_DATA_SYMBOLS.slice(i, i + BATCH_SIZE);
-        const results = await Promise.allSettled(
-          batch.map(async (sym) => {
-            const q = await quoteProvider.getQuote(sym);
-            if (q && q.ltp > 0) {
-              injectRealQuote(sym, {
-                ltp: q.ltp, prevClose: q.prevClose, open: q.open,
-                high: q.high, low: q.low, volume: q.volume,
-                changePct: q.changePct, vwap: q.vwap,
-              });
-              return sym;
-            }
-            return null;
-          }),
-        );
-        for (const r of results) {
-          if (r.status === 'fulfilled' && r.value) fetched++;
-        }
-        if (i + BATCH_SIZE < REAL_DATA_SYMBOLS.length) {
-          await new Promise(r => setTimeout(r, BATCH_DELAY));
-        }
+      if (i + BATCH_SIZE < REAL_DATA_SYMBOLS.length) {
+        await new Promise(r => setTimeout(r, BATCH_DELAY));
       }
     }
 
     realDataStats.fetched = fetched;
     realDataStats.lastSuccess = Date.now();
     if (fetched > 0) {
-      if (useBridge) {
-        if (bridgeFailed === 0) {
-          realDataStats.source = 'BRIDGE';
-          console.log(`[odss-market] Cycle complete: ${fetched} quotes from BRIDGE (Dhan)`);
-        } else if (bridgeFailed < fetched) {
-          realDataStats.source = 'BRIDGE+YAHOO';
-          console.log(`[odss-market] Cycle complete: ${fetched - bridgeFailed} from BRIDGE, ${bridgeFailed} from YAHOO`);
-        } else {
-          realDataStats.source = 'YAHOO';
-          console.log(`[odss-market] Cycle complete: ${fetched} quotes from YAHOO (bridge failed)`);
-        }
-      } else {
-        realDataStats.source = 'YAHOO';
-        console.log(`[odss-market] Cycle complete: ${fetched} quotes from YAHOO`);
-      }
+      realDataStats.source = 'YAHOO';
+      console.log(`[odss-market] Cycle complete: ${fetched} quotes from YAHOO`);
     }
     lastRealDataFetch = Date.now();
     writeQuotesFile();
