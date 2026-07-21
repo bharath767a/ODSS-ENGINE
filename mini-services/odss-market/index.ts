@@ -116,83 +116,135 @@ async function fetchAndInjectRealData() {
   console.log('[odss-market] fetchAndInjectRealData: starting...');
   try {
     const router = getDataRouter();
+    // Use BRIDGE provider first (routes through Dhan on user's laptop)
+    const bridgeProvider = router.getProvider('BRIDGE' as any);
     const yahooProvider = router.getProvider('YAHOO');
-    if (!yahooProvider) {
-      console.warn('[odss-market] Yahoo provider not available in router');
+    if (!yahooProvider && !bridgeProvider) {
+      console.warn('[odss-market] No data providers available');
       return;
     }
-    console.log('[odss-market] Yahoo provider found, fetching VIX...');
 
-    // Fetch India VIX first (most important)
+    const useBridge = !!bridgeProvider?.isConfigured();
+    const quoteProvider = useBridge ? bridgeProvider! : yahooProvider;
+    const providerName = useBridge ? 'BRIDGE' : 'YAHOO';
+    console.log(`[odss-market] Using ${providerName} provider for quotes...`);
+
+    // Fetch India VIX first (always from Yahoo — bridge doesn't expose VIX directly)
     try {
-      const vix = await yahooProvider.getIndiaVIX();
-      console.log('[odss-market] Yahoo VIX result:', vix);
-      if (vix > 0 && vix < 200) {
-        injectRealVix(vix);
-        realDataStats.source = 'YAHOO';
+      if (yahooProvider) {
+        const vix = await yahooProvider.getIndiaVIX();
+        console.log(`[odss-market] VIX: ${vix} from YAHOO`);
+        if (vix > 0 && vix < 200) {
+          injectRealVix(vix);
+          if (!useBridge) realDataStats.source = 'YAHOO';
+        }
       }
     } catch (e) {
       console.warn('[odss-market] VIX fetch failed:', (e as Error).message);
     }
 
-    // Fetch quotes for all symbols in batches (Yahoo rate-limits)
-    // Prioritize indices first, then stocks
-    const indices = REAL_DATA_SYMBOLS.filter((s) => {
-      const meta = ALL_SYMBOLS.find((a) => a.symbol === s);
-      return meta?.type === 'INDEX';
-    });
-    const stocks = REAL_DATA_SYMBOLS.filter((s) => {
-      const meta = ALL_SYMBOLS.find((a) => a.symbol === s);
-      return meta?.type === 'STOCK';
-    });
-
-    // Fetch ALL symbols in parallel batches of 5 (respecting Yahoo rate limits)
-    // With 94 symbols, this takes ~10 batches × 200ms = 2 seconds
-    // At 20s interval, that's 94 req / 20s = 282 req/min (under Yahoo's limit
-    // when combined with the 4s per-quote cache)
+    // Fetch quotes — use batch endpoint if bridge (Dhan supports 50 symbols/call)
     let fetched = 0;
-    const BATCH_SIZE = 5;
-    const BATCH_DELAY = 200; // ms between batches
+    let bridgeFailed = 0;
 
-    for (let i = 0; i < REAL_DATA_SYMBOLS.length; i += BATCH_SIZE) {
-      const batch = REAL_DATA_SYMBOLS.slice(i, i + BATCH_SIZE);
-      const results = await Promise.allSettled(
-        batch.map(async (sym) => {
-          const q = await yahooProvider.getQuote(sym);
-          if (q && q.ltp > 0) {
-            injectRealQuote(sym, {
-              ltp: q.ltp,
-              prevClose: q.prevClose,
-              open: q.open,
-              high: q.high,
-              low: q.low,
-              volume: q.volume,
-              changePct: q.changePct,
-              vwap: q.vwap,
-            });
-            return sym;
+    if (useBridge) {
+      // Bridge supports batch quotes — fetch all 93 symbols in 2 batches
+      const BATCH = 50;
+      for (let i = 0; i < REAL_DATA_SYMBOLS.length; i += BATCH) {
+        const batch = REAL_DATA_SYMBOLS.slice(i, i + BATCH);
+        try {
+          const quotesMap = await quoteProvider.getAllQuotes(batch);
+          for (const [sym, q] of quotesMap.entries()) {
+            if (q && q.ltp > 0) {
+              injectRealQuote(sym, {
+                ltp: q.ltp,
+                prevClose: q.prevClose,
+                open: q.open,
+                high: q.high,
+                low: q.low,
+                volume: q.volume,
+                changePct: q.changePct,
+                vwap: q.vwap,
+              });
+              fetched++;
+            }
           }
-          return null;
-        }),
-      );
-      for (const r of results) {
-        if (r.status === 'fulfilled' && r.value) fetched++;
+        } catch (e) {
+          console.warn(`[odss-market] Bridge batch failed:`, (e as Error).message);
+        }
       }
-      // Small delay between batches
-      if (i + BATCH_SIZE < REAL_DATA_SYMBOLS.length) {
-        await new Promise(r => setTimeout(r, BATCH_DELAY));
+
+      // Fetch any missing symbols individually via Yahoo fallback
+      const missing = REAL_DATA_SYMBOLS.filter(sym => {
+        const q = getQuote(sym);
+        return !q || q.ltp <= 0;
+      });
+      if (missing.length > 0 && yahooProvider) {
+        console.log(`[odss-market] Fetching ${missing.length} missing symbols from Yahoo fallback...`);
+        for (const sym of missing.slice(0, 20)) {
+          try {
+            const q = await yahooProvider.getQuote(sym);
+            if (q && q.ltp > 0) {
+              injectRealQuote(sym, {
+                ltp: q.ltp, prevClose: q.prevClose, open: q.open,
+                high: q.high, low: q.low, volume: q.volume,
+                changePct: q.changePct, vwap: q.vwap,
+              });
+              bridgeFailed++;
+            }
+          } catch {}
+        }
+      }
+    } else {
+      // Yahoo fallback — fetch in batches of 5
+      const BATCH_SIZE = 5;
+      const BATCH_DELAY = 200;
+      for (let i = 0; i < REAL_DATA_SYMBOLS.length; i += BATCH_SIZE) {
+        const batch = REAL_DATA_SYMBOLS.slice(i, i + BATCH_SIZE);
+        const results = await Promise.allSettled(
+          batch.map(async (sym) => {
+            const q = await quoteProvider.getQuote(sym);
+            if (q && q.ltp > 0) {
+              injectRealQuote(sym, {
+                ltp: q.ltp, prevClose: q.prevClose, open: q.open,
+                high: q.high, low: q.low, volume: q.volume,
+                changePct: q.changePct, vwap: q.vwap,
+              });
+              return sym;
+            }
+            return null;
+          }),
+        );
+        for (const r of results) {
+          if (r.status === 'fulfilled' && r.value) fetched++;
+        }
+        if (i + BATCH_SIZE < REAL_DATA_SYMBOLS.length) {
+          await new Promise(r => setTimeout(r, BATCH_DELAY));
+        }
       }
     }
 
     realDataStats.fetched = fetched;
     realDataStats.lastSuccess = Date.now();
     if (fetched > 0) {
-      realDataStats.source = 'YAHOO';
+      if (useBridge) {
+        if (bridgeFailed === 0) {
+          realDataStats.source = 'BRIDGE';
+          console.log(`[odss-market] Cycle complete: ${fetched} quotes from BRIDGE (Dhan)`);
+        } else if (bridgeFailed < fetched) {
+          realDataStats.source = 'BRIDGE+YAHOO';
+          console.log(`[odss-market] Cycle complete: ${fetched - bridgeFailed} from BRIDGE, ${bridgeFailed} from YAHOO`);
+        } else {
+          realDataStats.source = 'YAHOO';
+          console.log(`[odss-market] Cycle complete: ${fetched} quotes from YAHOO (bridge failed)`);
+        }
+      } else {
+        realDataStats.source = 'YAHOO';
+        console.log(`[odss-market] Cycle complete: ${fetched} quotes from YAHOO`);
+      }
     }
     lastRealDataFetch = Date.now();
-    // Write quotes file so the web server can read real prices
     writeQuotesFile();
-    // Archive live quotes for permanent storage (never deleted)
     try { archiveLiveQuotes(getAllQuotes()); } catch {}
   } catch (e) {
     realDataStats.failed++;
