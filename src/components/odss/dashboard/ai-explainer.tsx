@@ -40,7 +40,7 @@ export function AIExplainer({ rec }: { rec?: Recommendation }) {
         <CardTitle className="flex items-center justify-between text-sm">
           <span className="flex items-center gap-2 font-mono tracking-wide text-muted-foreground">
             <Sparkles className="h-4 w-4 text-ai" />
-            <span className="text-gradient-ai text-base font-bold">AI COACH</span>
+            <span className="text-gradient-ai text-base font-bold">AI DECISION ANALYSIS</span>
           </span>
           {r && (
             <span className="font-mono text-[10px] uppercase tracking-widest text-ai">

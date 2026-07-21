@@ -93,32 +93,36 @@ function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) 
   // ALWAYS show organized view
   return (
     <div className="space-y-3">
-      {/* NIFTY 50 — Permanent Benchmark Tracker */}
-      {niftyConfluence && (
-        <Card className="border-info/30 bg-card/50 backdrop-blur-sm">
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center justify-between text-sm">
-              <span className="flex items-center gap-2 font-mono tracking-wide text-muted-foreground">
-                <Activity className="h-4 w-4 text-info" />
-                <span className="text-info text-base font-bold">NIFTY 50 — BENCHMARK</span>
-                <span className="rounded bg-info/20 px-1.5 py-0.5 font-mono text-[9px] font-bold text-info">PERMANENT</span>
-              </span>
-              <span className="font-mono text-xs text-muted-foreground">
-                {niftyQuote ? `₹${niftyQuote.ltp.toFixed(2)} ${niftyQuote.changePct >= 0 ? '▲' : '▼'} ${Math.abs(niftyQuote.changePct).toFixed(2)}%` : '—'}
-              </span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="p-3">
-            <div className="mb-2 flex items-center gap-2">
-              <DirectionBadge direction={niftyConfluence.direction} />
-              <span className="font-mono text-[10px] text-muted-foreground">
-                {niftyConfluence.direction === 'CE' ? 'Bullish bias (buy calls on dips)' : 'Bearish bias (buy puts on rallies)'}
-              </span>
-            </div>
+      {/* NIFTY 50 — Permanent Benchmark Tracker (ALWAYS shows, even without confluence) */}
+      <Card className="border-info/30 bg-card/50 backdrop-blur-sm">
+        <CardHeader className="pb-2">
+          <CardTitle className="flex items-center justify-between text-sm">
+            <span className="flex items-center gap-2 font-mono tracking-wide text-muted-foreground">
+              <Activity className="h-4 w-4 text-info" />
+              <span className="text-info text-base font-bold">NIFTY 50 — BENCHMARK</span>
+              <span className="rounded bg-info/20 px-1.5 py-0.5 font-mono text-[9px] font-bold text-info">PERMANENT</span>
+            </span>
+            <span className="font-mono text-xs text-muted-foreground">
+              {niftyQuote ? `₹${niftyQuote.ltp.toFixed(2)} ${niftyQuote.changePct >= 0 ? '▲' : '▼'} ${Math.abs(niftyQuote.changePct).toFixed(2)}%` : '—'}
+            </span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-3">
+          <div className="mb-2 flex items-center gap-2">
+            <DirectionBadge direction={niftyConfluence?.direction ?? (niftyQuote && niftyQuote.changePct < -0.5 ? 'PE' : 'CE')} />
+            <span className="font-mono text-[10px] text-muted-foreground">
+              {(niftyConfluence?.direction ?? (niftyQuote && niftyQuote.changePct < -0.5 ? 'PE' : 'CE')) === 'CE' ? 'Bullish bias (buy calls on dips)' : 'Bearish bias (buy puts on rallies)'}
+            </span>
+          </div>
+          {niftyConfluence ? (
             <ConfluenceCard confluence={niftyConfluence} />
-          </CardContent>
-        </Card>
-      )}
+          ) : (
+            <div className="rounded-md border border-muted/30 bg-muted/5 p-2 text-center font-mono text-[9px] text-muted-foreground">
+              Confluence computing — awaiting market data (CVD 5m + Options 15m + VWAP 1h)
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* NEWS SHOCKERS — Separate prominent section */}
       {newsShockPicks.length > 0 && (
