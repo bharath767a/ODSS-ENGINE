@@ -25,20 +25,22 @@ import type { Quote, OptionChain } from '../types';
 import { NSEProvider } from './nse-provider';
 import { YahooProvider } from './yahoo-provider';
 import { AngelOneProvider } from './angelone-provider';
+import { DhanProvider } from './dhan-provider';
 import { ALL_SYMBOLS } from '../universe';
 
-// Priority order — higher priority providers are tried first.
-// NSE is highest (real option chains + real quotes), Yahoo is second
-// (real quotes + VIX, but no option chains), then broker APIs.
-const PRIORITY: ProviderName[] = ['NSE', 'YAHOO', 'ANGEL_ONE', 'UPSTOX', 'SIMULATOR'];
+// Priority order — DHAN is highest (real option chains + greeks + quotes),
+// then BRIDGE (user's AngelOne bridge), then Yahoo (free fallback), then NSE.
+const PRIORITY: ProviderName[] = ['DHAN' as any, 'BRIDGE' as any, 'YAHOO', 'NSE', 'ANGEL_ONE', 'UPSTOX', 'SIMULATOR'];
 
 export class ProviderRouter implements Provider {
-  name: ProviderName = 'SIMULATOR'; // The router itself is transparent
+  name: ProviderName = 'SIMULATOR';
   private providers: Map<ProviderName, Provider> = new Map();
   private preferredProvider: ProviderName | null = null;
 
   constructor() {
     // Register all providers
+    this.providers.set('DHAN' as any, new DhanProvider());
+    this.providers.set('BRIDGE' as any, new (require('./bridge-provider').BridgeProvider)());
     this.providers.set('NSE', new NSEProvider());
     this.providers.set('YAHOO', new YahooProvider());
     this.providers.set('ANGEL_ONE', new AngelOneProvider());

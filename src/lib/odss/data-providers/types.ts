@@ -90,4 +90,6 @@ rateLimiter.configure('NSE', 20, 60000);        // 20 req/min (NSE blocks aggres
 rateLimiter.configure('YAHOO', 500, 60000);     // 500 req/min (need ~300 for 94 symbols every 20s)
 rateLimiter.configure('ANGEL_ONE', 180, 60000); // 3 req/sec
 rateLimiter.configure('UPSTOX', 300, 60000);    // 5 req/sec
+rateLimiter.configure('BRIDGE' as any, 240, 60000); // 4 req/sec
+rateLimiter.configure('DHAN' as any, 100, 60000);   // 100 req/min (Lite plan = 2000/day)
 rateLimiter.configure('SIMULATOR', Infinity, 0); // unlimited
