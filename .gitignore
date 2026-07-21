@@ -55,3 +55,6 @@ server.log
 db/*.db
 upload/
 .zscripts/*.log
+nse-bridge/dhan-creds.json
+dhan-creds.json
+*.creds.json
