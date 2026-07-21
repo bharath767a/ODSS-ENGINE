@@ -1,0 +1,562 @@
+// ODSS - Options Decision Support System Schema
+// Indian Market Options Trading Decision Engine
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// AUTH - User accounts (NextAuth credentials provider)
+// Max 4 users enforced at registration time. Passwords are
+// bcrypt-hashed. JWT-based sessions (no DB session store).
+// ============================================================
+model User {
+  id        String   @id @default(cuid())
+  username  String   @unique
+  password  String   // bcrypt hashed
+  name      String?
+  role      String   @default("user") // "admin" | "user"
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ============================================================
+// PHASE 2 - DATA LAYER: Market Snapshots
+// ============================================================
+model MarketSnapshot {
+  id            String   @id @default(cuid())
+  timestamp     DateTime @default(now())
+  symbol        String   // NIFTY, BANKNIFTY, FINNIFTY or stock symbol
+  sector        String?
+  // OHLCV
+  open          Float
+  high          Float
+  low           Float
+  close         Float
+  prevClose     Float
+  volume        Float
+  // Derived
+  vwap          Float
+  changePct     Float
+  dayHigh       Float
+  dayLow        Float
+  // Option chain summary
+  iv            Float?   // Implied vol (ATM)
+  pcr           Float?   // Put-Call Ratio (OI based)
+  // Metadata
+  timeframe     String   @default("1m")
+  // Index for queries
+  @@index([symbol, timestamp])
+  @@index([timestamp])
+}
+
+// ============================================================
+// PHASE 7 - OPTION CHAIN SNAPSHOTS
+// ============================================================
+model OptionChainSnapshot {
+  id            String   @id @default(cuid())
+  timestamp     DateTime @default(now())
+  symbol        String
+  expiry        String   // YYYY-MM-DD
+  strike        Float
+  type          String   // CE | PE
+  // Quote
+  ltp           Float    // Last traded price
+  bid           Float
+  ask           Float
+  iv            Float
+  volume        Float
+  // Open Interest
+  oi            Float
+  oiChange      Float
+  // Greeks (computed via Black-Scholes)
+  delta         Float
+  gamma         Float
+  theta         Float
+  vega          Float
+  // Moneyness classification
+  moneyness     String   // ITM | ATM | OTM
+  @@index([symbol, expiry, timestamp])
+  @@index([timestamp])
+}
+
+// ============================================================
+// PHASE 3-5 - MARKET / SECTOR / RS STATE
+// ============================================================
+model MarketStateSnapshot {
+  id            String   @id @default(cuid())
+  timestamp     DateTime @default(now())
+  // Market-level
+  trend         String   // BULLISH | BEARISH | NEUTRAL
+  structure     String   // UPTREND | DOWNTREND | RANGE | BREAKOUT | REVERSAL
+  momentum      Float    // -100..100
+  volatility    String   // LOW | NORMAL | HIGH | EXTREME
+  indiaVix      Float
+  // Scores
+  marketScore   Float    // -100..100
+  marketConfidence Float // 0..100
+  marketState   String   // e.g. TRENDING_UP, RANGING, SELLING_OFF
+  dayType       String   // TREND | REVERSAL | RANGE | GAP
+  bias          String   // LONG | SHORT | NEUTRAL
+  // Breadth
+  advanceCount  Int
+  declineCount  Int
+  @@index([timestamp])
+}
+
+model SectorSnapshot {
+  id            String   @id @default(cuid())
+  timestamp     DateTime @default(now())
+  sector        String
+  rank          Int
+  strength      Float    // -100..100
+  momentum      Float    // -100..100
+  leadership    String   // LEADING | LAGGING | MIXED
+  changePct     Float
+  @@index([sector, timestamp])
+  @@index([timestamp])
+}
+
+// ============================================================
+// PHASE 8 - OPPORTUNITIES (ranked symbols)
+// ============================================================
+model Opportunity {
+  id            String   @id @default(cuid())
+  timestamp     DateTime @default(now())
+  symbol        String
+  sector        String?
+  // Scores per engine (-100..100)
+  marketScore   Float
+  sectorScore   Float
+  rsScore       Float
+  technicalScore Float
+  optionChainScore Float
+  // Combined
+  totalScore    Float    // 0..100
+  confidence    Float    // 0..100
+  rank          Int
+  // Recommendation
+  direction     String   // CE | PE  (Call or Put buying)
+  rationale     String
+  @@index([timestamp])
+  @@index([symbol])
+}
+
+// ============================================================
+// PHASE 9-13 - RECOMMENDATION (strike, entry, risk, mgmt, exit)
+// ============================================================
+model Recommendation {
+  id            String   @id @default(cuid())
+  timestamp     DateTime @default(now())
+  symbol        String
+  direction     String   // CE | PE
+  // Strike selection
+  primaryStrike Float
+  altStrike     Float?
+  aggressiveStrike Float?
+  strikeType    String   // ATM | ITM | OTM
+  // Entry plan
+  entryType     String   // MARKET | BREAKOUT | RETEST | VWAP | LIQUIDITY_SWEEP
+  entryPrice    Float    // underlying price target
+  entryTrigger  String
+  // Risk plan
+  stopLoss      Float    // underlying price
+  tp1           Float
+  tp2           Float
+  tp3           Float
+  rr            Float    // reward:risk ratio
+  positionSize  Int      // lots
+  maxLoss       Float    // rupees
+  maxProfit     Float    // rupees
+  // Decision
+  decision      String   // ENTER | WAIT | WATCH | AVOID
+  confidence    Float
+  reasoning     String
+  // Engine votes (JSON)
+  engineVotes   String
+  // Expiry
+  expiry        String
+  @@index([symbol, timestamp])
+  @@index([timestamp])
+}
+
+// ============================================================
+// PHASE 15 - STATE MACHINE / ACTIVE TRADES
+// ============================================================
+model TradeState {
+  id            String   @id @default(cuid())
+  symbol        String   @unique
+  direction     String   // CE | PE
+  state         String   // WATCHLIST | READY | WAITING_ENTRY | ENTERED | TP1 | TP2 | TRAILING | WEAKENING | EXIT | COMPLETE
+  // Entry
+  entryType     String?
+  entryStrike   Float?
+  entryPrice    Float?   // option premium at entry
+  underlyingEntryPrice Float?
+  entryTime     DateTime?
+  // Risk
+  stopLoss      Float?
+  initialStopLoss Float?
+  tp1           Float?
+  tp2           Float?
+  tp3           Float?
+  // Live
+  currentPrice  Float?
+  currentUnderlying Float?
+  pnl           Float?
+  rMultiple     Float?
+  // Exit
+  exitPrice     Float?
+  exitTime      DateTime?
+  exitReason    String?
+  // AI explanation
+  aiExplanation String?
+  // Meta
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  // State history (JSON array of {state, timestamp, reason})
+  stateHistory  String   @default("[]")
+  notes         String?
+  @@index([state])
+}
+
+// ============================================================
+// PHASE 19 - JOURNAL (completed trades)
+// ============================================================
+model TradeJournal {
+  id            String   @id @default(cuid())
+  symbol        String
+  direction     String
+  sector        String?
+  // Entry
+  entryStrike   Float
+  entryPrice    Float
+  entryTime     DateTime
+  entryType     String
+  underlyingEntryPrice Float
+  // Exit
+  exitPrice     Float
+  exitTime      DateTime
+  exitReason    String
+  underlyingExitPrice Float
+  // Risk at entry
+  stopLoss      Float
+  tp1           Float
+  tp2           Float
+  tp3           Float
+  // Outcome
+  pnl           Float
+  rMultiple     Float
+  confidence    Float
+  marketState   String
+  // Reasons
+  entryReasons  String
+  exitReasons   String
+  holdTimeMinutes Int
+  // Tagging
+  tags          String?  // comma separated
+  createdAt     DateTime @default(now())
+  @@index([symbol])
+  @@index([entryTime])
+}
+
+// ============================================================
+// PHASE 20 - ANALYTICS (aggregated metrics)
+// ============================================================
+model PerformanceMetric {
+  id            String   @id @default(cuid())
+  timestamp     DateTime @default(now())
+  metric        String   // winRate | profitFactor | avgR | maxDD | bestSector | etc
+  value         Float
+  metadata      String?  // JSON for breakdowns
+  @@index([metric, timestamp])
+}
+
+// ============================================================
+// PHASE 6 / 18 - LOGS (every decision logged)
+// ============================================================
+model DecisionLog {
+  id            String   @id @default(cuid())
+  timestamp     DateTime @default(now())
+  level         String   // INFO | WARN | ERROR | DECISION
+  engine        String   // which engine produced it
+  symbol        String?
+  message       String
+  payload       String?  // JSON
+  @@index([timestamp])
+  @@index([engine])
+}
+
+// ============================================================
+// PHASE 21 - CONFIGURATION (persisted, editable via UI)
+// ============================================================
+model Configuration {
+  id            String   @id @default("default")
+  // Engine weights (sum to 1.0)
+  weightMarket       Float @default(0.15)
+  weightSector       Float @default(0.10)
+  weightRS           Float @default(0.10)
+  weightTechnical    Float @default(0.25)
+  weightOptionChain  Float @default(0.25)
+  weightRisk         Float @default(0.15)
+  // Risk settings
+  riskPerTradePct    Float @default(1.0)   // % of capital risked per trade
+  capital            Float @default(200000) // rupees
+  lotSize            Int   @default(75)     // NIFTY lot
+  minRR              Float @default(2.0)
+  // Confidence thresholds
+  minConfidenceEnter Float @default(65)
+  minConfidenceWait  Float @default(45)
+  // Scan
+  scanIntervalMs     Int   @default(5000)
+  // Volatility / VIX
+  vixHigh            Float @default(18)
+  vixExtreme         Float @default(25)
+  // Trade management
+  trailATRMultiple   Float @default(2.0)
+  breakevenAtR       Float @default(1.0)
+  // PCR thresholds
+  pcrBullish         Float @default(1.2)
+  pcrBearish         Float @default(0.8)
+  // AI
+  enableAIExplanation Boolean @default(true)
+  // Guardrails (V1.1 — discipline enforcement)
+  maxTradesPerDay    Int   @default(3)
+  maxDailyLossPct    Float @default(3.0)   // % of capital
+  profitCapPct       Float @default(5.0)   // stop when up this %
+  noEntryAfterMinutes Int  @default(30)    // no new entries X min before close
+  updatedAt     DateTime @updatedAt
+}
+
+// ============================================================
+// REPLAY FRAMEWORK (Milestone 2 — Validation)
+// Records every tick + engine output for deterministic replay
+// ============================================================
+model ReplaySession {
+  id            String   @id @default(cuid())
+  name          String
+  startTime     DateTime @default(now())
+  endTime       DateTime?
+  tickCount     Int      @default(0)
+  scanCount     Int      @default(0)
+  status        String   @default("RECORDING") // RECORDING | COMPLETE | REPLAYING
+  // Summary stats (filled when session ends)
+  finalNifty    Float?
+  finalVix      Float?
+  regimeHistory String?  // JSON array of {regime, startTick, endTick}
+  @@index([startTime])
+}
+
+model ReplayTick {
+  id            String   @id @default(cuid())
+  sessionId     String
+  tickNumber    Int
+  timestamp     DateTime @default(now())
+  // Market state at this tick
+  vix           Float
+  // JSON snapshots of all symbol quotes at this tick
+  quotes        String   // JSON: {symbol: {ltp, changePct, vwap, volume}}
+  breadth       String   // JSON: {advance, decline, ratio}
+  @@index([sessionId, tickNumber])
+}
+
+model ReplayScan {
+  id            String   @id @default(cuid())
+  sessionId     String
+  scanNumber    Int
+  tickNumber    Int      // which tick this scan ran on
+  timestamp     DateTime @default(now())
+  // Full engine outputs (JSON)
+  market        String?  // MarketEngineOutput JSON
+  sectors       String?  // SectorEngineOutput JSON
+  opportunities String?  // OpportunityEngineOutput JSON
+  // Top recommendation snapshot
+  topSymbol     String?
+  topDirection  String?
+  topScore      Float?
+  topDecision   String?
+  topConfidence Float?
+  // Full recommendations for top 10 (JSON)
+  recommendations String? // JSON array of Recommendation
+  @@index([sessionId, scanNumber])
+}
+
+model ValidationReport {
+  id            String   @id @default(cuid())
+  sessionId     String
+  generatedAt   DateTime @default(now())
+  // Overall metrics
+  totalScans    Int
+  totalEnter    Int
+  totalWait     Int
+  totalWatch    Int
+  totalAvoid    Int
+  // Decision stability (how often decision flipped)
+  avgStability  Float    // 0..1, higher = more stable
+  flipCount     Int      // number of decision changes
+  // Engine contribution (win rate with vs without each engine)
+  // Measured by: for each ENTER decision, did price reach TP1 before SL?
+  enterWinRate  Float    // % of ENTER decisions that hit TP1
+  enterLossRate Float    // % of ENTER decisions that hit SL
+  avgRMultiple  Float    // avg R-multiple if all ENTERs were taken
+  // Per-engine contribution (JSON: {engine: winRateWithout})
+  engineContribution String?
+  // Session summary
+  bestOpportunity  String? // symbol that had highest score
+  worstDecision    String? // description of worst decision
+  @@index([sessionId])
+}
+
+// ============================================================
+// PAPER TRADING ENGINE
+// ============================================================
+// Simulated options trades with realistic fills, transaction costs,
+// and P&L tracking. Used for strategy validation without real money.
+// ============================================================
+
+model PaperTrade {
+  id              String   @id @default(cuid())
+  // Identification
+  symbol          String   // NIFTY, BANKNIFTY, RELIANCE, etc.
+  direction       String   // "CE" | "PE"
+  strategy        String   // "LONG_CALL" | "LONG_PUT" | "BULL_PUT_SPREAD" | etc.
+  variantGroup    String?  // group ID for multi-strategy spawner
+  variantId       String?  // specific variant ID within group
+  // Entry
+  entryStrike     Float
+  entryPrice      Float    // premium paid/received
+  entryTime       DateTime @default(now())
+  entryUnderlying Float    // underlying price at entry
+  entryType       String   @default("MARKET") // MARKET, LIMIT, BREAKOUT, etc.
+  quantity        Int      @default(1) // number of lots
+  lotSize         Int      @default(50)
+  // Exit
+  exitPrice       Float?
+  exitTime        DateTime?
+  exitUnderlying  Float?
+  exitReason      String?  // "TP1", "SL", "TIME", "MANUAL", "EXIT_ENGINE"
+  // P&L
+  grossPnl        Float    @default(0) // premium difference
+  totalCosts      Float    @default(0) // brokerage + STT + exchange + GST
+  netPnl          Float    @default(0) // grossPnl - totalCosts
+  rMultiple       Float    @default(0) // R-multiple based on initial risk
+  // Context at entry
+  marketState     String?  // TRENDING_UP, RANGING, etc.
+  vixAtEntry      Float?
+  sectorAtEntry   String?
+  regimeAtEntry   String?  // data regime: REAL, SIMULATOR, etc.
+  // Status
+  status          String   @default("OPEN") // OPEN, CLOSED
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([symbol])
+  @@index([status])
+  @@index([variantGroup])
+  @@index([strategy])
+}
+
+model PaperFund {
+  id              String   @id @default(cuid())
+  // Single-row table (enforced at app level)
+  startingCapital Float    @default(500000) // ₹5,00,000
+  currentBalance  Float    @default(500000)
+  realizedPnl     Float    @default(0)
+  openPositions   Int      @default(0)
+  totalTrades     Int      @default(0)
+  winningTrades   Int      @default(0)
+  losingTrades    Int      @default(0)
+  maxDrawdown     Float    @default(0)
+  peakBalance     Float    @default(500000)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// ============================================================
+// LEARNING ENGINE — Pattern recognition from completed trades
+// ============================================================
+
+model LearningPattern {
+  id              String   @id @default(cuid())
+  // Pattern key: (symbol, direction, marketState, trend, sector, vixBand, regime)
+  symbol          String
+  direction       String   // CE | PE
+  marketState     String?
+  technicalTrend   String?
+  sector          String?
+  vixBand         String?  // LOW | NORMAL | HIGH | EXTREME
+  dataRegime      String   @default("REAL") // REAL | SIMULATOR
+  // Statistics
+  rawN            Int      @default(0) // raw trade count
+  effectiveN      Float   @default(0) // discounted for correlated trades
+  wins            Int      @default(0)
+  losses          Int      @default(0)
+  avgR            Float   @default(0) // avg R-multiple
+  totalPnl        Float   @default(0)
+  // Reliability
+  tier            String   @default("INSUFFICIENT") // INSUFFICIENT | PRELIMINARY | RELIABLE
+  winRatePct      Float   @default(0)
+  ciLower         Float   @default(0) // Wilson 80% CI lower bound
+  ciUpper         Float   @default(0) // Wilson 80% CI upper bound
+  // Metadata
+  lastSeenAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([symbol, direction, marketState, technicalTrend, sector, vixBand, dataRegime])
+  @@index([dataRegime])
+  @@index([tier])
+}
+
+// ============================================================
+// STRATEGY LAB — Genetic algorithm for strategy evolution
+// ============================================================
+
+model StrategyVariant {
+  id              String   @id @default(cuid())
+  name            String   @unique // e.g. "BullCallSpread-v1"
+  genome          String   // JSON: {strategy, entryRules, exitRules, riskRules, positionSizing}
+  // Statistics
+  rawN            Int      @default(0)
+  effectiveN      Float   @default(0)
+  wins            Int      @default(0)
+  losses          Int      @default(0)
+  profitFactor    Float   @default(0)
+  avgR            Float   @default(0)
+  totalPnl        Float   @default(0)
+  // Fitness (genetic algorithm score)
+  fitness         Float   @default(0)
+  // Reliability
+  tier            String   @default("INSUFFICIENT")
+  winRatePct      Float   @default(0)
+  // Status
+  status          String   @default("CANDIDATE") // CANDIDATE | ACTIVE | RETIRED | GRAVEYARD
+  generation      Int      @default(0)
+  parentName      String?  // parent variant name (for evolution tracking)
+  dataRegime      String   @default("REAL")
+  // Metadata
+  lastSeenAt      DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status])
+  @@index([tier])
+  @@index([dataRegime])
+}
+
+model EvolutionLog {
+  id              String   @id @default(cuid())
+  generation      Int
+  action          String   // CREATE | PROMOTE | RETIRE | PRUNE | MUTATE | CROSSOVER
+  variantName     String
+  details         String?  // JSON: {reason, oldStatus, newStatus, fitnessDelta, ...}
+  timestamp       DateTime @default(now())
+
+  @@index([generation])
+  @@index([variantName])
+}
