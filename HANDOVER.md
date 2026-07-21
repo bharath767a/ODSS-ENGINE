@@ -265,7 +265,240 @@ cd mini-services/odss-market && bun run dev  # market service on port 3002
 - `GET /indices` — NIFTY/BANKNIFTY/FINNIFTY quotes
 - All endpoints require `X-Bridge-Token` header (except /health)
 
+## ⚠️ CRITICAL INSTRUCTION FOR THE NEW DEVELOPER
+
+**DO NOT rebuild or rewrite the dashboard.** This is a WORKING, PRODUCTION system. Your job is to:
+1. **Continue development** from the current state
+2. **Fix bugs** in the existing code
+3. **Add features** to the existing codebase
+4. **Integrate** the pending items (smart-money-bias, squeeze-detector, real option chains)
+
+The dashboard is LIVE and WORKING. The user (bharath767a) is actively trading with it. Do NOT:
+- ❌ Create a new Next.js project
+- ❌ Rewrite the dashboard components
+- ❌ Change the architecture
+- ❌ Remove existing features
+
+DO:
+- ✅ Clone this repo and run it as-is
+- ✅ Read the code to understand the existing logic
+- ✅ Make incremental improvements
+- ✅ Test changes before pushing
+
+---
+
+## How to Access the Archive Data (914 MB)
+
+The archive folder (`/home/z/odss-data/archive/`) contains historical data that is TOO LARGE for GitHub (914 MB). It has 3 subfolders:
+
+```
+archive/
+├── historical/    ← 10 years of daily candles for all 93 stocks
+├── optionchains/  ← Historical option chain snapshots
+└── quotes/        ← Historical intraday quote snapshots
+```
+
+### Option A: The Archive Auto-Rebuilds (Recommended)
+
+The engine **automatically rebuilds the archive** from scratch on a fresh server:
+1. On startup, `fetchAndArchiveHistorical()` downloads 10 years of daily candles from Yahoo Finance for all 93 symbols
+2. Every 10 seconds, `archiveLiveQuotes()` saves current quotes to `archive/quotes/`
+3. Every scan, option chains are saved to `archive/optionchains/`
+
+**You don't need the old archive.** The engine will rebuild it automatically. Just:
+```bash
+# After starting the engine, wait 10-15 minutes for the initial download
+pm2 logs odss-market --lines 20 | grep "Historical"
+# You should see: "Historical data archived: XX symbols"
+```
+
+### Option B: Get the Archive from the Current Server
+
+If you want the existing 914 MB archive immediately (instead of waiting for it to rebuild):
+
+**The user (bharath767a) can provide it via:**
+1. **Google Drive / Dropbox** — User compresses the archive and uploads it
+2. **Direct server access** — User gives you SSH access to the current sandbox
+
+To compress and download from the current sandbox:
+```bash
+# On the current sandbox:
+cd /home/odss-data
+tar -czf archive.tar.gz archive/
+# This creates a ~100-200MB compressed file
+# Download it via the file explorer or SCP
+```
+
+Then on the new server:
+```bash
+# Upload archive.tar.gz to the new server
+mkdir -p /home/odss-data
+cd /home/odss-data
+tar -xzf archive.tar.gz
+# The archive is now ready
+```
+
+### Option C: Start Fresh (Simplest)
+
+The archive is NOT required for the engine to work. It's only used for:
+- Long-term backtesting
+- Historical fundamental analysis
+- Strategy performance tracking
+
+**The engine works perfectly without the archive.** It will rebuild it automatically over time. If you just want to get started quickly:
+```bash
+mkdir -p /home/odss-data/archive/historical
+mkdir -p /home/odss-data/archive/optionchains
+mkdir -p /home/odss-data/archive/quotes
+# Done — engine will populate these folders automatically
+```
+
+---
+
+## Setup Instructions for New Developer
+
+### Step 1: Clone the Repository
+```bash
+git clone https://github.com/bharath767a/ODSS-ENGINE.git
+cd ODSS-ENGINE
+```
+
+### Step 2: Install Dependencies
+```bash
+bun install
+cd mini-services/odss-market && bun install socket.io && cd ..
+```
+
+### Step 3: Create Data Directory
+```bash
+mkdir -p /home/odss-data/archive/historical
+mkdir -p /home/odss-data/archive/optionchains
+mkdir -p /home/odss-data/archive/quotes
+
+# Copy data snapshot files (from the repo's data-snapshot/ folder)
+cp data-snapshot/engine-state.json /home/odss-data/
+cp data-snapshot/quotes.json /home/odss-data/
+cp data-snapshot/conviction-state.json /home/odss-data/
+cp data-snapshot/news-archive.json /home/odss-data/
+cp data-snapshot/bridge-config.json /home/odss-data/
+```
+
+### Step 4: Create Database
+```bash
+bun run db:push
+```
+
+### Step 5: Set Up Dhan Credentials
+The user will provide these privately. Create the credential files:
+```bash
+# On the server (for direct Dhan API if needed):
+cat > /home/odss-data/dhan-config.json << 'EOF'
+{
+  "clientId": "PROVIDED_BY_USER",
+  "apiKey": "PROVIDED_BY_USER",
+  "apiSecret": "PROVIDED_BY_USER",
+  "accessToken": "GENERATED_DAILY_VIA_DHAN_LOGIN_PY"
+}
+EOF
+
+# On the bridge machine (India laptop or server):
+cat > nse-bridge/dhan-creds.json << 'EOF'
+{
+  "clientId": "PROVIDED_BY_USER",
+  "apiKey": "PROVIDED_BY_USER",
+  "apiSecret": "PROVIDED_BY_USER",
+  "accessToken": "GENERATED_DAILY_VIA_DHAN_LOGIN_PY"
+}
+EOF
+```
+
+### Step 6: Start the Bridge (on India laptop or server)
+```bash
+cd nse-bridge
+pip install fastapi uvicorn requests pyotp
+python dhan-login.py    # Generate daily access token
+python bridge_server_v4.py  # Start bridge on port 8765
+```
+
+### Step 7: Start ngrok (for bridge tunnel)
+```bash
+ngrok http 8765
+# Copy the HTTPS URL
+# Update /home/odss-data/bridge-config.json with the new URL
+```
+
+### Step 8: Start the Engine
+```bash
+# Using PM2 (recommended):
+pm2 start ecosystem.config.cjs
+
+# OR manually:
+bun run dev  # Web server on port 3000
+cd mini-services/odss-market && bun run dev  # Market service on port 3002
+```
+
+### Step 9: Verify It's Working
+```bash
+# Check services:
+pm2 list
+
+# Check data flowing:
+curl -s http://localhost:3000/api/odss/state | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+print('VIX:', d.get('market', {}).get('indiaVix'))
+print('Quotes:', len(d.get('topRecommendations', [])))
+"
+
+# Check dashboard:
+# Open http://localhost:3000 in browser
+```
+
+### Step 10: Understand the Current State
+Read these files to understand what's already built:
+1. `HANDOVER.md` (this file) — Architecture + setup
+2. `src/lib/odss/orchestrator.ts` — Main scan loop
+3. `src/lib/odss/engines/conviction-dna.ts` — 5-layer ranking system
+4. `src/components/odss/dashboard/opportunity-table.tsx` — Main dashboard component
+5. `mini-services/odss-market/index.ts` — Market service (Socket.IO)
+
+---
+
+## What's Working Right Now (July 21, 2026)
+
+### Live Data Flow
+- **Yahoo Finance**: 93 F&O stocks + India VIX (updates every 10s)
+- **Dhan Bridge**: Option chains + greeks (via ngrok tunnel to India laptop)
+- **News**: 5 RSS feeds archived every 5 min with entity extraction
+
+### Dashboard Features
+- NIFTY 50 BENCHMARK card (permanent, always shows)
+- CE BULLISH PICKS + PE BEARISH PICKS (side by side)
+- NEWS SHOCKERS section (when active)
+- Confluence cards (CVD 5m + Options 15m + VWAP 1h)
+- Active Trades panel with greeks + decision stability
+- AI Decision Analysis (rule-based, not LLM per scan)
+- Market status banner (OPEN/CLOSED/PRE-OPEN)
+- Take Trade button on each pick
+
+### Engine Intelligence
+- Conviction DNA (Elo + Bayesian + track record + confluence + survivorship)
+- Market Regime Classifier (TRENDING/CHOPPY/HIGH_VOL/LOW_VOL)
+- Time Window Quality (amateur hour, trend window, square-off zone)
+- Ranking Stabilizer (prevents pick shuffling)
+- Market Session Guard (freezes engine when market closed)
+- Decision Stability (5-rule system: cooldown + confirmation + hysteresis)
+
+### What the User Does Every Morning
+1. Start bridge on India laptop: `python bridge_server_v4.py`
+2. Start ngrok: `ngrok http 8765`
+3. If ngrok URL changed, update `bridge-config.json` on sandbox
+4. Refresh dashboard at 09:20 IST — picks appear within 2-3 min
+
+---
+
 ## Contact
 - GitHub: https://github.com/bharath767a/ODSS-ENGINE.git
 - User: bharath767a
 - Original developer: Z.ai Code (AI agent)
+- Dhan credentials: Provided privately by user (NOT in git)
