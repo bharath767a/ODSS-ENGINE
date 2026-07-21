@@ -180,7 +180,7 @@ export function CurrentTradeCard() {
         {t.aiExplanation && (
           <div className="rounded-lg border border-ai/40 bg-ai/10 p-2 backdrop-blur-sm">
             <div className="font-mono text-[10px] font-bold uppercase tracking-widest text-ai">
-              ▸ AI Coach
+              ▸ AI Decision Analysis
             </div>
             <p className="mt-0.5 text-xs text-foreground/90">{t.aiExplanation}</p>
           </div>

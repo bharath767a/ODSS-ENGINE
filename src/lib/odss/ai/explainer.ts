@@ -71,7 +71,7 @@ export async function explainDecision(
   mode: 'SELECTED' | 'REJECTED',
 ): Promise<AIExplanation> {
   const context = buildContextForDecision(rec, mode);
-  const systemPrompt = `You are ODSS AI Coach — an options trading explainer for the Indian market (NIFTY/BANKNIFTY/stocks).
+  const systemPrompt = `You are ODSS AI Decision Analysis — an options trading explainer for the Indian market (NIFTY/BANKNIFTY/stocks).
 You NEVER give trade recommendations or decisions. You ONLY explain WHY the deterministic engine arrived at its decision.
 Be concise, structured, and trader-friendly. Use bullet points. Reference the engine votes and facts.
 Always include a risk note. Always end with a one-line coaching tip.
@@ -123,7 +123,7 @@ export async function explainTradeManagement(
     `Exit reasons: ${exit.facts.join('; ')}`,
   ].join('\n');
 
-  const systemPrompt = `You are ODSS AI Coach — an options trade management explainer for the Indian market.
+  const systemPrompt = `You are ODSS AI Decision Analysis — an options trade management explainer for the Indian market.
 You NEVER decide. You ONLY explain WHY the engine recommends HOLDING, TRAILING, or EXITING.
 Be concise, structured, trader-friendly. Use bullet points. Reference R-multiple, SL distance, and exit score.
 End with a one-line coaching tip.`;

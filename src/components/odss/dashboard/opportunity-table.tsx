@@ -167,85 +167,88 @@ function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) 
         </Card>
       )}
 
-      {/* CE — BULLISH PICKS (Top 5) */}
-      <Card className="border-bull/30 bg-card/50 backdrop-blur-sm">
-        <CardHeader className="pb-2">
-          <CardTitle className="flex items-center justify-between text-sm">
-            <span className="flex items-center gap-2 font-mono tracking-wide text-muted-foreground">
-              <TrendingUp className="h-4 w-4 text-bull" />
-              <span className="text-bull text-base font-bold">CE — BULLISH PICKS</span>
-            </span>
-            <span className="font-mono text-[10px] uppercase tracking-widest text-bull/80">
-              {cePicks.length} PICKS · CALL OPTIONS
-            </span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2 p-3">
-          {cePicks.length === 0 && (
-            <div className="py-6 text-center font-mono text-xs text-muted-foreground">
-              No bullish (CE) setups yet. Engine scanning...
-            </div>
-          )}
-          {cePicks.map((pick: any, idx: number) => {
-            const q = liveQuotes[pick.symbol];
-            const rec = recs.find((r) => r.symbol === pick.symbol);
-            const pickConfluence = confluence?.find((c: any) => c.symbol === pick.symbol);
-            const isTaken = takenSymbols.has(pick.symbol);
-            return (
-              <SimplePickCard
-                key={`ce-${pick.symbol}`}
-                pick={pick}
-                idx={idx}
-                q={q}
-                rec={rec}
-                isTaken={isTaken}
-                onSelect={onSelect}
-                pickConfluence={pickConfluence}
-              />
-            );
-          })}
-        </CardContent>
-      </Card>
+      {/* CE & PE PICKS — Side by side (no scrolling needed) */}
+      <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+        {/* CE — BULLISH PICKS (Top 5) */}
+        <Card className="border-bull/30 bg-card/50 backdrop-blur-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center justify-between text-sm">
+              <span className="flex items-center gap-2 font-mono tracking-wide text-muted-foreground">
+                <TrendingUp className="h-4 w-4 text-bull" />
+                <span className="text-bull text-base font-bold">CE — BULLISH</span>
+              </span>
+              <span className="font-mono text-[10px] uppercase tracking-widest text-bull/80">
+                {cePicks.length} CALLS
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 p-3">
+            {cePicks.length === 0 && (
+              <div className="py-6 text-center font-mono text-xs text-muted-foreground">
+                No bullish (CE) setups yet. Engine scanning...
+              </div>
+            )}
+            {cePicks.map((pick: any, idx: number) => {
+              const q = liveQuotes[pick.symbol];
+              const rec = recs.find((r) => r.symbol === pick.symbol);
+              const pickConfluence = confluence?.find((c: any) => c.symbol === pick.symbol);
+              const isTaken = takenSymbols.has(pick.symbol);
+              return (
+                <SimplePickCard
+                  key={`ce-${pick.symbol}`}
+                  pick={pick}
+                  idx={idx}
+                  q={q}
+                  rec={rec}
+                  isTaken={isTaken}
+                  onSelect={onSelect}
+                  pickConfluence={pickConfluence}
+                />
+              );
+            })}
+          </CardContent>
+        </Card>
 
-      {/* PE — BEARISH PICKS (Top 5) */}
-      <Card className="border-bear/30 bg-card/50 backdrop-blur-sm">
-        <CardHeader className="pb-2">
-          <CardTitle className="flex items-center justify-between text-sm">
-            <span className="flex items-center gap-2 font-mono tracking-wide text-muted-foreground">
-              <TrendingDown className="h-4 w-4 text-bear" />
-              <span className="text-bear text-base font-bold">PE — BEARISH PICKS</span>
-            </span>
-            <span className="font-mono text-[10px] uppercase tracking-widest text-bear/80">
-              {pePicks.length} PICKS · PUT OPTIONS
-            </span>
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2 p-3">
-          {pePicks.length === 0 && (
-            <div className="py-6 text-center font-mono text-xs text-muted-foreground">
-              No bearish (PE) setups yet. Engine scanning...
-            </div>
-          )}
-          {pePicks.map((pick: any, idx: number) => {
-            const q = liveQuotes[pick.symbol];
-            const rec = recs.find((r) => r.symbol === pick.symbol);
-            const pickConfluence = confluence?.find((c: any) => c.symbol === pick.symbol);
-            const isTaken = takenSymbols.has(pick.symbol);
-            return (
-              <SimplePickCard
-                key={`pe-${pick.symbol}`}
-                pick={pick}
-                idx={idx}
-                q={q}
-                rec={rec}
-                isTaken={isTaken}
-                onSelect={onSelect}
-                pickConfluence={pickConfluence}
-              />
-            );
-          })}
-        </CardContent>
-      </Card>
+        {/* PE — BEARISH PICKS (Top 5) */}
+        <Card className="border-bear/30 bg-card/50 backdrop-blur-sm">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center justify-between text-sm">
+              <span className="flex items-center gap-2 font-mono tracking-wide text-muted-foreground">
+                <TrendingDown className="h-4 w-4 text-bear" />
+                <span className="text-bear text-base font-bold">PE — BEARISH</span>
+              </span>
+              <span className="font-mono text-[10px] uppercase tracking-widest text-bear/80">
+                {pePicks.length} PUTS
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 p-3">
+            {pePicks.length === 0 && (
+              <div className="py-6 text-center font-mono text-xs text-muted-foreground">
+                No bearish (PE) setups yet. Engine scanning...
+              </div>
+            )}
+            {pePicks.map((pick: any, idx: number) => {
+              const q = liveQuotes[pick.symbol];
+              const rec = recs.find((r) => r.symbol === pick.symbol);
+              const pickConfluence = confluence?.find((c: any) => c.symbol === pick.symbol);
+              const isTaken = takenSymbols.has(pick.symbol);
+              return (
+                <SimplePickCard
+                  key={`pe-${pick.symbol}`}
+                  pick={pick}
+                  idx={idx}
+                  q={q}
+                  rec={rec}
+                  isTaken={isTaken}
+                  onSelect={onSelect}
+                  pickConfluence={pickConfluence}
+                />
+              );
+            })}
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }

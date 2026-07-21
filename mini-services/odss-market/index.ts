@@ -26,6 +26,7 @@ import { ALL_SYMBOLS } from '../../src/lib/odss/universe';
 import { fetchRealNews } from '../../src/lib/odss/news/news-fetcher';
 import { archiveNews } from '../../src/lib/odss/news/archive';
 import { archiveLiveQuotes, archiveHistoricalCandles } from '../../src/lib/odss/archive/data-archive';
+import { getMarketSession, shouldEngineBeActive, shouldPollRealData } from '../../src/lib/odss/market-session';
 import type { Direction } from '../../src/lib/odss/types';
 
 const PORT = 3002;
@@ -113,6 +114,14 @@ function writeQuotesFile() {
 
 async function fetchAndInjectRealData() {
   if (!realDataEnabled) return;
+
+  // ─── MARKET SESSION CHECK ───
+  // When market is closed, reduce polling to 5 min (saves API quota)
+  if (!shouldPollRealData()) {
+    if (Date.now() - lastRealDataFetch < 5 * 60 * 1000) return;
+    console.log('[odss-market] Market closed — polling real data at reduced frequency (5 min)');
+  }
+  lastRealDataFetch = Date.now();
   console.log('[odss-market] fetchAndInjectRealData: starting...');
   try {
     const router = getDataRouter();
@@ -295,6 +304,14 @@ setInterval(async () => {
 // Scan loop: run all engines and broadcast results
 setInterval(async () => {
   if (!scanning) return;
+
+  // ─── MARKET SESSION GUARD ───
+  // When market is CLOSED, DON'T run scans — engine state is frozen.
+  // This prevents picks from shuffling when no real trading is happening.
+  if (!shouldEngineBeActive()) {
+    return;
+  }
+
   try {
     await runScan();
     if (isRecording()) {
