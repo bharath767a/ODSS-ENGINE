@@ -54,7 +54,8 @@ interface PersistedState {
   lockExpiresAt: number;
   convictionSet: string[];
   convictionOrder: string[];
-  convictionDwell: Record<string, number>; // how many scans each symbol has been in the set
+  convictionDwell: Record<string, number>;
+  watchlistOrder: string[];
 }
 
 let scoreHistory = new Map<string, ScoreRecord[]>();
@@ -62,7 +63,8 @@ let lockedSymbol: string | null = null;
 let lockExpiresAt = 0;
 let convictionSet = new Set<string>();
 let convictionOrder: string[] = [];
-let convictionDwell = new Map<string, number>(); // dwell time counter
+let convictionDwell = new Map<string, number>();
+let watchlistOrder: string[] = [];
 let stateLoaded = false;
 
 function loadState(): void {
@@ -77,6 +79,7 @@ function loadState(): void {
     convictionSet = new Set(data.convictionSet || []);
     convictionOrder = data.convictionOrder || [];
     convictionDwell = new Map(Object.entries(data.convictionDwell || {}));
+    watchlistOrder = data.watchlistOrder || [];
   } catch {
     // File doesn't exist yet — start fresh
   }
@@ -92,6 +95,7 @@ function saveState(): void {
       convictionSet: Array.from(convictionSet),
       convictionOrder,
       convictionDwell: Object.fromEntries(convictionDwell),
+      watchlistOrder,
     };
     writeFileSync(STATE_FILE, JSON.stringify(data));
   } catch {}
@@ -267,12 +271,42 @@ export function runConvictionEngine(
   // Only keep top 3
   const top3 = convictionPicks.slice(0, 3);
 
-  // Step 5: Build watchlist (picks not in convictionSet, sorted by convictionScore)
-  const watchlist: ConvictionPick[] = [];
+  // Step 5: Build watchlist with STABLE ORDER (NO re-sorting every scan)
+  // ------------------------------------------------------------
+  // BUG FIX: Previously sorted by convictionScore every scan → constant shuffling
+  // NEW: Use persisted watchlistOrder. Only add new symbols at the END.
+  // Only remove symbols that drop below threshold for multiple scans.
+  // ------------------------------------------------------------
+  const WATCHLIST_MIN_SCORE = 45;
+  const WATCHLIST_MAX = 7;
+
+  // Build set of currently eligible symbols
+  const eligible = new Set<string>();
   for (const [symbol, pick] of allPicksMap) {
-    if (!convictionSet.has(symbol)) watchlist.push(pick);
+    if (!convictionSet.has(symbol) && pick.convictionScore >= WATCHLIST_MIN_SCORE) {
+      eligible.add(symbol);
+    }
   }
-  watchlist.sort((a, b) => b.convictionScore - a.convictionScore);
+
+  // Remove symbols from watchlistOrder that are no longer eligible
+  watchlistOrder = watchlistOrder.filter(s => eligible.has(s));
+
+  // Add newly-eligible symbols at the END (preserve insertion order)
+  for (const symbol of eligible) {
+    if (!watchlistOrder.includes(symbol)) {
+      watchlistOrder.push(symbol);
+    }
+  }
+
+  // Build watchlist picks in stable order (NOT sorted by score)
+  const watchlist: ConvictionPick[] = [];
+  for (const symbol of watchlistOrder) {
+    const pick = allPicksMap.get(symbol);
+    if (pick) watchlist.push(pick);
+  }
+
+  // Limit to max displayed
+  const watchlistDisplayed = watchlist.slice(0, WATCHLIST_MAX);
 
   // Step 6: Lock logic — lock ALL 3 picks, not just #1
   // Check if lock is still valid
@@ -324,7 +358,7 @@ export function runConvictionEngine(
   // Save state to disk
   saveState();
 
-  return { convictionPicks: top3, watchlist: watchlist.slice(0, 7), lockedPick: top3.find(p => p.locked) ?? null, newsShockPicks, updatedAt: now };
+  return { convictionPicks: top3, watchlist: watchlistDisplayed, lockedPick: top3.find(p => p.locked) ?? null, newsShockPicks, updatedAt: now };
 }
 
 export function resetConvictionEngine(): void {
@@ -334,5 +368,6 @@ export function resetConvictionEngine(): void {
   convictionSet.clear();
   convictionOrder = [];
   convictionDwell.clear();
+  watchlistOrder = [];
   saveState();
 }
