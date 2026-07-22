@@ -271,16 +271,21 @@ export function runConvictionEngine(
   // Only keep top 3
   const top3 = convictionPicks.slice(0, 3);
 
-  // Step 5: Build watchlist with STABLE ORDER (NO re-sorting every scan)
+  // Step 5: Build watchlist with STABLE ORDER (NO re-sorting, NO removal on single-scan absence)
   // ------------------------------------------------------------
-  // BUG FIX: Previously sorted by convictionScore every scan → constant shuffling
-  // NEW: Use persisted watchlistOrder. Only add new symbols at the END.
-  // Only remove symbols that drop below threshold for multiple scans.
+  // BUG FIX: The top 15 opportunities change every scan (scores fluctuate).
+  // Previously, watchlist symbols were removed the moment they dropped out of top 15.
+  // Now: symbols stay in watchlist for 8 scans (~40s) even if temporarily absent.
   // ------------------------------------------------------------
   const WATCHLIST_MIN_SCORE = 45;
   const WATCHLIST_MAX = 7;
+  const WATCHLIST_ABSENCE_LIMIT = 8; // keep for 8 scans even if absent from top 15
 
-  // Build set of currently eligible symbols
+  // Track how many scans each watchlist symbol has been absent
+  if (!(globalThis as any)._wlAbsence) (globalThis as any)._wlAbsence = new Map<string, number>();
+  const wlAbsence = (globalThis as any)._wlAbsence as Map<string, number>;
+
+  // Build set of currently eligible symbols (in top 15 + score >= threshold)
   const eligible = new Set<string>();
   for (const [symbol, pick] of allPicksMap) {
     if (!convictionSet.has(symbol) && pick.convictionScore >= WATCHLIST_MIN_SCORE) {
@@ -288,19 +293,37 @@ export function runConvictionEngine(
     }
   }
 
-  // Remove symbols from watchlistOrder that are no longer eligible
-  watchlistOrder = watchlistOrder.filter(s => eligible.has(s));
+  // Update absence counters
+  for (const sym of watchlistOrder) {
+    if (eligible.has(sym) || convictionSet.has(sym)) {
+      wlAbsence.set(sym, 0);
+    } else {
+      wlAbsence.set(sym, (wlAbsence.get(sym) ?? 0) + 1);
+    }
+  }
+
+  // Only remove symbols that have been absent for WATCHLIST_ABSENCE_LIMIT scans
+  watchlistOrder = watchlistOrder.filter(s => {
+    const absence = wlAbsence.get(s) ?? 0;
+    if (absence >= WATCHLIST_ABSENCE_LIMIT) {
+      wlAbsence.delete(s);
+      return false;
+    }
+    return true;
+  });
 
   // Add newly-eligible symbols at the END (preserve insertion order)
   for (const symbol of eligible) {
-    if (!watchlistOrder.includes(symbol)) {
+    if (!watchlistOrder.includes(symbol) && !convictionSet.has(symbol)) {
       watchlistOrder.push(symbol);
+      wlAbsence.set(symbol, 0);
     }
   }
 
   // Build watchlist picks in stable order (NOT sorted by score)
   const watchlist: ConvictionPick[] = [];
   for (const symbol of watchlistOrder) {
+    // Use current pick data if available, otherwise skip (symbol temporarily absent)
     const pick = allPicksMap.get(symbol);
     if (pick) watchlist.push(pick);
   }
