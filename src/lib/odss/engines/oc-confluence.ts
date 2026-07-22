@@ -3,8 +3,8 @@
  * ==============================================================
  *
  * Consumes REAL option chains (injected from the Dhan bridge) and tracks how
- * OI, PCR, IV and ATM greeks evolve over three horizons — 5m (timing), 15m
- * (confirmation) and 4h (regime). It turns that into:
+ * OI, PCR, IV and ATM greeks (delta) evolve over three horizons — 5m (timing),
+ * 15m (confirmation) and 1h (intraday regime). It turns that into:
  *
  *   • an OI-action classification (long buildup / short covering / short
  *     buildup / long unwinding) — the classic price×OI quadrants applied to
@@ -16,7 +16,7 @@
  *     chain turns against it (e.g. call writing surges against a long call).
  *
  * State (per-symbol minute-resolution history) is PERSISTED to DATA_DIR so the
- * 5m/15m/4h context survives a restart / sudden reset — nothing is lost.
+ * 5m/15m/1h context survives a restart / sudden reset — nothing is lost.
  */
 import { readFileSync, writeFileSync } from 'fs';
 import { dataPath, ensureDataDir } from '../data-dir';
@@ -33,7 +33,7 @@ export interface Snapshot {
 }
 
 export interface TFResult {
-  tf: '5m' | '15m' | '4h';
+  tf: '5m' | '15m' | '1h';
   priceChangePct: number;
   callOIChangePct: number;
   putOIChangePct: number;
@@ -49,17 +49,18 @@ export interface OCConfluence {
   pcr: number; pcrTrend: 'RISING' | 'FALLING' | 'FLAT';
   ivTrend: 'RISING' | 'FALLING' | 'FLAT';
   atmDelta: number;        // ATM delta of the traded side
-  tf: Record<'5m' | '15m' | '4h', TFResult>;
+  tf: Record<'5m' | '15m' | '1h', TFResult>;
   entrySignal: OCEntrySignal;
   exitSignal: OCExitSignal;
+  headline: string;        // clear one-line OPEN/CLOSE call
   notes: string[];
   updatedAt: number;
 }
 
 const STATE_FILE = dataPath('oc-confluence-state.json');
-const HISTORY_CAP = 260;        // ~4h at 1-min resolution
+const HISTORY_CAP = 140;        // >1h at 1-min resolution (with buffer)
 const MIN_RESOLUTION_MS = 60_000;
-const TF_MS = { '5m': 5 * 60_000, '15m': 15 * 60_000, '4h': 4 * 3600_000 } as const;
+const TF_MS = { '5m': 5 * 60_000, '15m': 15 * 60_000, '1h': 60 * 60_000 } as const;
 
 const history = new Map<string, Snapshot[]>();
 const latest = new Map<string, OCConfluence>();
@@ -142,6 +143,12 @@ export function scoreTF(dir: Direction, cur: Snapshot, prev: Snapshot, tf: TFRes
     s -= clamp(pcrChange * 30, -12, 12);              // falling PCR bearish
     s += clamp(-priceChangePct * 6, -12, 14);
   }
+  // Delta momentum: the traded ATM option gaining directional exposure (moving
+  // toward ITM) confirms the move with real greeks. bull → call delta rising;
+  // bear → put delta getting more negative (magnitude rising).
+  const dCur = bull ? cur.atmCallDelta : -cur.atmPutDelta;
+  const dPrev = bull ? prev.atmCallDelta : -prev.atmPutDelta;
+  s += clamp((dCur - dPrev) * 120, -10, 12);
   const score = Math.round(clamp(s));
   const verdict = score >= 62 ? `${tf} confirms ${bull ? 'bullish' : 'bearish'}` : score <= 38 ? `${tf} contradicts` : `${tf} mixed`;
   return { tf, priceChangePct, callOIChangePct, putOIChangePct, pcrChange, score, verdict };
@@ -187,14 +194,14 @@ export function updateOCConfluence(symbol: string, chain: OptionChain, direction
   if (snaps.length > HISTORY_CAP) snaps.shift();
 
   const tf: OCConfluence['tf'] = {} as any;
-  for (const key of ['5m', '15m', '4h'] as const) {
+  for (const key of ['5m', '15m', '1h'] as const) {
     const prev = lookback(snaps, TF_MS[key]);
     tf[key] = prev ? scoreTF(direction, snap, prev, key)
       : { tf: key, priceChangePct: 0, callOIChangePct: 0, putOIChangePct: 0, pcrChange: 0, score: 50, verdict: `${key} warming up` };
   }
 
-  // Aggregate: 5m weighted for timing, 15m confirmation, 4h regime.
-  const ocScore = Math.round(clamp(0.45 * tf['5m'].score + 0.35 * tf['15m'].score + 0.20 * tf['4h'].score));
+  // Aggregate: 5m weighted for timing, 15m confirmation, 1h intraday regime.
+  const ocScore = Math.round(clamp(0.45 * tf['5m'].score + 0.35 * tf['15m'].score + 0.20 * tf['1h'].score));
 
   const prev5 = lookback(snaps, TF_MS['5m']) ?? snaps[0];
   const oiAction = classifyOI(direction, snap, prev5);
@@ -223,10 +230,20 @@ export function updateOCConfluence(symbol: string, chain: OptionChain, direction
   if (ivTrend !== 'FLAT') notes.push(`IV ${ivTrend.toLowerCase()}`);
   notes.push(`ATM Δ ${atmDelta.toFixed(2)}`);
 
+  // Clear one-line call (CLOSE takes priority over OPEN when both would fire —
+  // protecting an open position matters more than opening a new one).
+  const oiTxt = oiAction.replace('_', ' ').toLowerCase();
+  let headline: string;
+  if (exitSignal === 'EXIT') headline = `CLOSE ${direction}: chain turned against (${tf['5m'].verdict}${ivTrend === 'FALLING' ? ', IV falling' : ''})`;
+  else if (exitSignal === 'REDUCE') headline = `TRIM ${direction}: momentum fading (${oiTxt})`;
+  else if (entrySignal === 'ENTER') headline = `OPEN ${direction}: chain confirms — ${oiTxt}, ${tf['5m'].verdict}, ΔΤΜ ${atmDelta.toFixed(2)}`;
+  else if (entrySignal === 'AVOID') headline = `AVOID ${direction}: chain contradicts (${tf['5m'].verdict})`;
+  else headline = `HOLD/WAIT ${direction}: chain mixed (OC ${ocScore})`;
+
   const result: OCConfluence = {
     symbol, direction, ocScore, oiAction,
     pcr: chain.pcr, pcrTrend, ivTrend, atmDelta,
-    tf, entrySignal, exitSignal, notes, updatedAt: now,
+    tf, entrySignal, exitSignal, headline, notes, updatedAt: now,
   };
   latest.set(symbol, result);
   save(now);

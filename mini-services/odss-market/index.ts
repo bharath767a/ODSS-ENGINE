@@ -28,6 +28,8 @@ import { archiveNews } from '../../src/lib/odss/news/archive';
 import { archiveLiveQuotes, archiveHistoricalCandles, archiveOptionChain } from '../../src/lib/odss/archive/data-archive';
 import { fetchAndInjectOptionChains } from '../../src/lib/odss/data-providers/option-chain-feed';
 import { updateOCConfluence, getAllOCConfluence, getOCConfluence } from '../../src/lib/odss/engines/oc-confluence';
+import { listTaken, assignStrike, type TakenTrade } from '../../src/lib/odss/taken-trades';
+import { recordNewsShocks } from '../../src/lib/odss/news/shocks-store';
 import { getMarketSession, shouldEngineBeActive, shouldPollRealData } from '../../src/lib/odss/market-session';
 import { dataPath, ensureDataDir } from '../../src/lib/odss/data-dir';
 import type { Direction } from '../../src/lib/odss/types';
@@ -231,6 +233,9 @@ async function fetchOptionChainsAndConfluence() {
     for (const p of (conv?.pePicks ?? [])) dirBySym.set(p.symbol, 'PE');
     const active: any = store.activeTrade;
     if (active?.symbol) dirBySym.set(active.symbol, active.direction);
+    // Always fetch chains for the user's OPEN taken positions so they are
+    // tracked with real greeks + confluence even if they drop out of the picks.
+    for (const t of listTaken('ACTIVE')) dirBySym.set(t.symbol, t.direction);
     for (const idx of OC_INDEX_SYMBOLS) if (!dirBySym.has(idx)) dirBySym.set(idx, 'CE');
 
     const symbols = Array.from(dirBySym.keys()).slice(0, 12); // cap for Dhan rate limits
@@ -276,6 +281,63 @@ function enrichWithOCConfluence(store: any): void {
     }
   } catch { /* non-critical */ }
 }
+
+// ============================================================
+// TAKEN-TRADE TRACKING (real greeks + P&L + close recommendation)
+// ============================================================
+// For each open position the user took, pull the traded strike's greeks and
+// premium from the REAL option chain, compute live P&L, and combine with the
+// 5m/15m/1h option-chain confluence to say clearly: HOLD / TRAIL / TRIM / CLOSE.
+function analyzeTakenTrade(t: TakenTrade): TakenTrade {
+  const chain = getOptionChain(t.symbol);
+  const quote = getQuote(t.symbol);
+  const underlying = quote?.ltp ?? t.entryUnderlying;
+
+  let strike = t.strike;
+  if ((!strike || strike <= 0) && chain) { strike = chain.atmStrike; try { assignStrike(t.id, strike); } catch {} }
+
+  let delta: number | undefined, theta: number | undefined, iv: number | undefined, gamma: number | undefined, currentPremium: number | undefined;
+  if (chain && strike) {
+    const sameSide = chain.strikes.filter(r => r.type === t.direction);
+    const row = sameSide.find(r => r.strike === strike)
+      ?? sameSide.sort((a, b) => Math.abs(a.strike - strike) - Math.abs(b.strike - strike))[0];
+    if (row) { delta = row.delta; theta = row.theta; iv = row.iv; gamma = row.gamma; currentPremium = row.ltp; }
+  }
+  if (currentPremium == null || currentPremium <= 0) {
+    // Fallback: estimate premium from the underlying move via delta.
+    const move = underlying - t.entryUnderlying;
+    currentPremium = Math.max(0.5, t.entryPremium + move * (delta ?? 0.5) * (t.direction === 'CE' ? 1 : -1));
+  }
+  const pnl = currentPremium - t.entryPremium;
+  const pnlPct = t.entryPremium > 0 ? (pnl / t.entryPremium) * 100 : 0;
+
+  const oc = getOCConfluence(t.symbol);
+  let recommendation: TakenTrade['recommendation'] = 'HOLD';
+  let recReason = 'On track — hold';
+  if (oc?.exitSignal === 'EXIT') { recommendation = 'CLOSE'; recReason = oc.headline; }
+  else if (pnlPct <= -50) { recommendation = 'CLOSE'; recReason = `Premium down ${pnlPct.toFixed(0)}% — cut the loss`; }
+  else if (pnlPct >= 40) { recommendation = 'REDUCE'; recReason = `Up ${pnlPct.toFixed(0)}% — book partial, trail the rest`; }
+  else if (oc?.exitSignal === 'REDUCE') { recommendation = 'REDUCE'; recReason = oc.headline; }
+  else if (oc?.exitSignal === 'TRAIL') { recommendation = 'TRAIL'; recReason = 'Strong in favour — trail the stop'; }
+
+  return {
+    ...t, strike,
+    currentUnderlying: +underlying.toFixed(2), currentPremium: +currentPremium.toFixed(2),
+    pnl: +pnl.toFixed(2), pnlPct: +pnlPct.toFixed(1),
+    delta, theta, iv, gamma,
+    ocScore: oc?.ocScore, ocExitSignal: oc?.exitSignal, oiAction: oc?.oiAction, ocHeadline: oc?.headline,
+    recommendation, recReason, updatedAt: Date.now(),
+  };
+}
+
+function trackTakenTrades() {
+  try {
+    const enriched = listTaken('ACTIVE').map(analyzeTakenTrade);
+    io.emit('taken-trades:update', { trades: enriched, timestamp: Date.now() });
+  } catch (e) { /* non-critical */ }
+}
+setInterval(trackTakenTrades, 5000);
+console.log('[odss-market] Taken-trade tracking loop started (real greeks + P&L, 5s)');
 
 // ============================================================
 // Background News Archiving — fetches real news every 5 minutes
@@ -400,6 +462,9 @@ setInterval(async () => {
     // picks so "enter on time / exit on time" reflects the option chain + delta
     // ON TOP OF the technical setup. Only fires when real chains are flowing.
     enrichWithOCConfluence(store);
+
+    // Persist news-shock events with timestamps (deduped) for the Opportunities tab.
+    try { recordNewsShocks((store.conviction as any)?.newsShockPicks); } catch {}
 
     const ocConfluence = (store as any).ocConfluence || {};
 

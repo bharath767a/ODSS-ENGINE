@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils';
 import type { Recommendation } from '@/lib/odss/types';
 
 function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) => void }) {
-  const { topRecommendations, liveQuotes, conviction, activeTrades, confluence, nifty } = useODSS();
+  const { topRecommendations, liveQuotes, conviction, takenTrades, confluence, nifty } = useODSS();
   const recs = topRecommendations;
   const convictionPicks = conviction?.convictionPicks ?? [];
   const watchlist = conviction?.watchlist ?? [];
@@ -31,11 +31,11 @@ function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) 
   // Set of symbols currently taken (active trades)
   const takenSymbols = useMemo(() => {
     const s = new Set<string>();
-    for (const t of activeTrades ?? []) {
+    for (const t of takenTrades ?? []) {
       if (t.status === 'ACTIVE') s.add(t.symbol);
     }
     return s;
-  }, [activeTrades]);
+  }, [takenTrades]);
 
   // Build CE and PE lists. v3: if the engine emits stable per-side books, use
   // them verbatim (already stable + best-2 flagged). Otherwise fall back to the
@@ -297,7 +297,7 @@ function SimplePickCard({ pick, idx, q, rec, isTaken, onSelect, pickConfluence }
       const res = await fetch('/api/odss/taken-trades', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol: pick.symbol, direction: pick.direction, entryPrice, sector: pick.sector }),
+        body: JSON.stringify({ symbol: pick.symbol, direction: pick.direction, entryPrice, entryUnderlying: q?.ltp, sector: pick.sector }),
       });
       if (!res.ok) throw new Error('Failed to take trade');
       setShowTakeForm(false);

@@ -28,6 +28,10 @@ export interface ODSSState {
   breadth: { advanceCount: number; declineCount: number; advanceDeclineRatio: number } | null;
   // Focused symbol option chain
   optionChain: any | null;
+  // Taken positions (tracked with real greeks) + option-chain confluence
+  takenTrades: any[];
+  ocConfluence: Record<string, any>;
+  confluence: any[] | null;
   connected: boolean;
   lastUpdate: number;
   // Recording status
@@ -58,6 +62,9 @@ const initialState: ODSSState = {
   vix: 0,
   breadth: null,
   optionChain: null,
+  takenTrades: [],
+  ocConfluence: {},
+  confluence: null,
   connected: false,
   lastUpdate: 0,
   recording: false,
@@ -114,9 +121,15 @@ function connect() {
       conviction: data.conviction ?? currentState.conviction,
       activeTrade: data.activeTrade !== undefined ? data.activeTrade : currentState.activeTrade,
       topRecommendations: data.topRecommendations ?? currentState.topRecommendations,
+      ocConfluence: data.ocConfluence ?? currentState.ocConfluence,
       decisionLog: data.decisionLog ?? currentState.decisionLog,
       lastUpdate: Date.now(),
     };
+    emit();
+  });
+
+  socket.on('taken-trades:update', (data: any) => {
+    currentState = { ...currentState, takenTrades: data.trades ?? [], lastUpdate: Date.now() };
     emit();
   });
 
@@ -162,6 +175,7 @@ export function useODSS(): ODSSState & {
   stopRecording: () => Promise<{ ok: boolean; tickCount?: number; scanCount?: number; error?: string }>;
   listSessions: () => Promise<{ ok: boolean; sessions?: any[]; error?: string }>;
   validateSession: (sessionId: string) => Promise<{ ok: boolean; report?: any; error?: string }>;
+  closeTaken: (idOrSymbol: { id?: string; symbol?: string; direction?: string }, reason?: string) => Promise<any>;
 } {
   const [state, setState] = useState<ODSSState>(currentState);
 
@@ -170,9 +184,20 @@ export function useODSS(): ODSSState & {
     listeners.add(setState);
     // Use a microtask to avoid synchronous setState in effect
     Promise.resolve().then(() => setState(currentState));
+    // Seed taken positions immediately (before the first socket push).
+    fetch('/api/odss/taken-trades').then(r => r.json()).then((d) => {
+      if (Array.isArray(d?.trades)) { currentState = { ...currentState, takenTrades: d.trades }; emit(); }
+    }).catch(() => {});
     return () => {
       listeners.delete(setState);
     };
+  }, []);
+
+  const closeTaken = useCallback((idOrSymbol: { id?: string; symbol?: string; direction?: string }, reason?: string) => {
+    const qs = idOrSymbol.id ? `id=${encodeURIComponent(idOrSymbol.id)}`
+      : `symbol=${encodeURIComponent(idOrSymbol.symbol || '')}${idOrSymbol.direction ? `&direction=${idOrSymbol.direction}` : ''}`;
+    return fetch(`/api/odss/taken-trades?${qs}${reason ? `&reason=${encodeURIComponent(reason)}` : ''}`, { method: 'DELETE' })
+      .then(r => r.json()).catch((e) => ({ error: e.message }));
   }, []);
 
   const enterTrade = useCallback((symbol: string, direction: 'CE' | 'PE') => {
@@ -244,5 +269,5 @@ export function useODSS(): ODSSState & {
     });
   }, []);
 
-  return { ...state, enterTrade, exitTrade, focusSymbol, resetSimulator, manualScan, startRecording, stopRecording, listSessions, validateSession };
+  return { ...state, enterTrade, exitTrade, focusSymbol, resetSimulator, manualScan, startRecording, stopRecording, listSessions, validateSession, closeTaken };
 }

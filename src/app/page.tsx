@@ -33,6 +33,8 @@ import { SwingTab } from '@/components/odss/fundamentals/swing-tab';
 import { SectorPerformancePanel } from '@/components/odss/fundamentals/sector-performance-panel';
 import { NewsAlerts } from '@/components/odss/alerts/news-alerts';
 import { NewsPopup } from '@/components/odss/alerts/news-popup';
+import { NewsShockers } from '@/components/odss/dashboard/news-shockers';
+import { TakenPositions } from '@/components/odss/dashboard/taken-positions';
 import {
   Activity,
   LayoutDashboard,
@@ -252,6 +254,7 @@ function ODSSDashboard() {
               </div>
               <div className="space-y-3">
                 <CurrentTradeCard />
+                <TakenPositions />
                 <OpportunityTable onSelect={handleSelect} />
                 <NewsAlerts />
               </div>
@@ -266,11 +269,12 @@ function ODSSDashboard() {
           {/* OPPORTUNITIES */}
           <TabsContent value="opportunities" className="space-y-3">
             <div className="grid gap-3 lg:grid-cols-3">
-              <div className="lg:col-span-2">
+              <div className="space-y-3 lg:col-span-2">
                 <OpportunityTable onSelect={handleSelect} />
-                <NewsAlerts />
               </div>
               <div className="space-y-3">
+                <TakenPositions />
+                <NewsShockers />
                 <AIExplainer rec={selectedRec ?? topRecommendations[0]} />
                 <EngineVotesPanel rec={selectedRec ?? topRecommendations[0]} />
               </div>
