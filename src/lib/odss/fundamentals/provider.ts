@@ -2,7 +2,7 @@
  * ODSS - Real Fundamental Data Provider
  *
  * Derives fundamental analysis from REAL Yahoo Finance historical data:
- *   - 10-year daily candles (from /home/z/odss-data/archive/historical/)
+ *   - 10-year daily candles (from <DATA_DIR>/archive/historical/)
  *   - Real price movements, returns, volatility
  *   - Real sector-relative performance
  *
@@ -32,6 +32,7 @@ import type {
 import { ALL_SYMBOLS, getSymbolMeta } from '../universe';
 import { getHistoricalCandles } from '../archive/data-archive';
 import { readFileSync } from 'fs';
+import { dataPath } from '../data-dir';
 
 // Static company profiles (publicly available reference data, NOT generated)
 const COMPANY_PROFILES: Record<string, Partial<CompanyProfile>> = {
@@ -104,7 +105,7 @@ export class FundamentalProvider {
 
   private getLiveQuote(symbol: string): any | null {
     try {
-      const raw = readFileSync('/home/z/odss-data/quotes.json', 'utf-8');
+      const raw = readFileSync(dataPath('quotes.json'), 'utf-8');
       const all = JSON.parse(raw);
       return all.quotes?.find((q: any) => q.symbol === symbol) ?? null;
     } catch { return null; }

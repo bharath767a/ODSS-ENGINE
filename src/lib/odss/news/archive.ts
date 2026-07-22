@@ -1,16 +1,17 @@
 /**
  * ODSS - News Archive
  * Auto-archives every fetched news item with extracted entities.
- * File-based storage at /home/z/odss-data/news-archive.json, capped at 500 items.
+ * File-based storage at <DATA_DIR>/news-archive.json, capped at 500 items.
  */
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
 import { extractEntities, type NewsEntities } from './entity-extractor';
 import type { NewsItem } from './types';
+import { dataPath, ensureDataDir } from '../data-dir';
 
 export interface ArchivedNews extends NewsItem { entities: NewsEntities; archivedAt: number; }
 interface ArchiveData { items: ArchivedNews[]; lastUpdated: number; }
 
-const ARCHIVE_FILE = '/home/z/odss-data/news-archive.json';
+const ARCHIVE_FILE = dataPath('news-archive.json');
 const MAX_ITEMS = 500;
 let cache: ArchiveData | null = null;
 let lastRead = 0;
@@ -22,7 +23,7 @@ function loadArchive(): ArchiveData {
 }
 
 function saveArchive(data: ArchiveData): void {
-  try { mkdirSync('/home/z/odss-data', { recursive: true }); data.lastUpdated = Date.now(); writeFileSync(ARCHIVE_FILE, JSON.stringify(data)); cache = data; lastRead = Date.now(); } catch {}
+  try { ensureDataDir(); data.lastUpdated = Date.now(); writeFileSync(ARCHIVE_FILE, JSON.stringify(data)); cache = data; lastRead = Date.now(); } catch {}
 }
 
 export function archiveNews(items: NewsItem[]): void {

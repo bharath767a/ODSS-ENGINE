@@ -17,6 +17,9 @@ function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) 
   const convictionPicks = conviction?.convictionPicks ?? [];
   const watchlist = conviction?.watchlist ?? [];
   const newsShockPicks = conviction?.newsShockPicks ?? [];
+  // v3: stable per-side books emitted directly by the conviction engine.
+  const stableCE = conviction?.cePicks ?? null;
+  const stablePE = conviction?.pePicks ?? null;
 
   // NIFTY permanent confluence
   const niftyConfluence = useMemo(() => {
@@ -34,8 +37,11 @@ function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) 
     return s;
   }, [activeTrades]);
 
-  // Build CE and PE lists — use conviction picks first, then fill from topRecommendations
+  // Build CE and PE lists. v3: if the engine emits stable per-side books, use
+  // them verbatim (already stable + best-2 flagged). Otherwise fall back to the
+  // legacy derivation from convictionPicks + watchlist + topRecommendations.
   const cePicks = useMemo(() => {
+    if (stableCE && stableCE.length > 0) return stableCE.slice(0, 5);
     const ce = convictionPicks.filter((p: any) => p.direction === 'CE');
     const ceWatch = watchlist.filter((p: any) => p.direction === 'CE');
     const ceRecs = recs.filter((r) => r.direction === 'CE').map(r => ({
@@ -61,9 +67,10 @@ function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) 
       if (!seen.has(p.symbol)) { seen.add(p.symbol); result.push(p); }
     }
     return result.slice(0, 5);
-  }, [convictionPicks, watchlist, recs, liveQuotes]);
+  }, [stableCE, convictionPicks, watchlist, recs, liveQuotes]);
 
   const pePicks = useMemo(() => {
+    if (stablePE && stablePE.length > 0) return stablePE.slice(0, 5);
     const pe = convictionPicks.filter((p: any) => p.direction === 'PE');
     const peWatch = watchlist.filter((p: any) => p.direction === 'PE');
     const peRecs = recs.filter((r) => r.direction === 'PE').map(r => ({
@@ -88,7 +95,7 @@ function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) 
       if (!seen.has(p.symbol)) { seen.add(p.symbol); result.push(p); }
     }
     return result.slice(0, 5);
-  }, [convictionPicks, watchlist, recs, liveQuotes]);
+  }, [stablePE, convictionPicks, watchlist, recs, liveQuotes]);
 
   // ALWAYS show organized view
   return (
@@ -319,6 +326,7 @@ function SimplePickCard({ pick, idx, q, rec, isTaken, onSelect, pickConfluence }
             <div className="flex items-center gap-1.5">
               <span className="font-sans text-sm font-bold tracking-wide text-foreground">{pick.symbol}</span>
               <DirectionBadge direction={pick.direction} />
+              {pick.isPrime && <span className="flex items-center gap-0.5 rounded bg-warn/25 px-1 py-0.5 font-mono text-[9px] font-bold text-warn" title={pick.whyBest}><Trophy className="h-2.5 w-2.5" />PRIME</span>}
               {pick.locked && <span className="flex items-center gap-0.5 rounded bg-ai/20 px-1 py-0.5 font-mono text-[9px] font-bold text-ai"><Lock className="h-2.5 w-2.5" />{pick.lockMinutesLeft}m</span>}
               {isTaken && <span className="rounded bg-bull/20 px-1 py-0.5 font-mono text-[9px] font-bold text-bull"><Check className="inline h-2 w-2" /> TAKEN</span>}
             </div>
@@ -335,6 +343,9 @@ function SimplePickCard({ pick, idx, q, rec, isTaken, onSelect, pickConfluence }
         <span className={cn('rounded px-1.5 py-0.5 font-mono text-[10px] font-bold tnum', pick.convictionScore >= 70 ? 'bg-bull/20 text-bull' : pick.convictionScore >= 55 ? 'bg-warn/20 text-warn' : 'bg-bear/20 text-bear')}>{pick.convictionScore?.toFixed(0) ?? '?'}</span>
         {pick.technicalHealth !== undefined && (
           <span className={cn('rounded px-1 py-0.5 font-mono text-[8px] font-bold', pick.technicalHealth >= 60 ? 'bg-bull/15 text-bull' : pick.technicalHealth >= 50 ? 'bg-warn/15 text-warn' : 'bg-bear/15 text-bear')}>TH {pick.technicalHealth}</span>
+        )}
+        {pick.roomScore !== undefined && (
+          <span className={cn('rounded px-1 py-0.5 font-mono text-[8px] font-bold', pick.roomScore >= 60 ? 'bg-bull/15 text-bull' : pick.roomScore >= 45 ? 'bg-warn/15 text-warn' : 'bg-bear/15 text-bear')} title={pick.roomNotes?.join(' · ')}>ROOM {pick.roomScore}</span>
         )}
         <span className={cn('flex items-center gap-1 rounded px-2 py-1 font-mono text-[10px] font-bold tracking-widest', signalConfig.bg)}>
           {signalConfig.icon}{signalConfig.label}

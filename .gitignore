@@ -58,3 +58,6 @@ upload/
 nse-bridge/dhan-creds.json
 dhan-creds.json
 *.creds.json
+
+# npm lockfile — project uses bun (bun.lock is the source of truth)
+package-lock.json

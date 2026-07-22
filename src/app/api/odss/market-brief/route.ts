@@ -3,6 +3,7 @@ import { getDataRouter } from '@/lib/odss/data-providers/router';
 import { getStore } from '@/lib/odss/store/store';
 import { getSymbolMeta, STOCKS } from '@/lib/odss/universe';
 import { readFileSync } from 'fs';
+import { dataPath } from '@/lib/odss/data-dir';
 import { fetchNewsForBrief } from '@/lib/odss/news/news-fetcher';
 import { generateNewsIntelligence } from '@/lib/odss/news/intelligence';
 import { archiveNews, getRecentArchived } from '@/lib/odss/news/archive';
@@ -478,7 +479,7 @@ export async function GET(req: NextRequest) {
 
     // ---- Read REAL prices from the shared quotes file (written by market service) ----
     // This avoids Yahoo rate-limiting (the 503 error) — the market service already
-    // fetches from Yahoo every 20s and writes to /home/z/odss-data/quotes.json
+    // fetches from Yahoo every 20s and writes to <DATA_DIR>/quotes.json
     let nifty: Quote | null = null;
     let bankNifty: Quote | null = null;
     let finNifty: Quote | null = null;
@@ -487,7 +488,7 @@ export async function GET(req: NextRequest) {
     let stockQuotes: Quote[] = [];
 
     try {
-      const raw = readFileSync('/home/z/odss-data/quotes.json', 'utf-8');
+      const raw = readFileSync(dataPath('quotes.json'), 'utf-8');
       const allData = JSON.parse(raw);
       const allQuotes = allData.quotes ?? [];
 

@@ -50,7 +50,7 @@ function readEnvFile(): Record<string, string> {
 
 function writeEnvFile(env: Record<string, string>): void {
   const lines: string[] = [
-    'DATABASE_URL=file:/home/z/my-project/db/custom.db',
+    `DATABASE_URL=${process.env.DATABASE_URL || 'file:./db/custom.db'}`,
     '',
     '# ===========================================================================',
     '# ODSS Data Provider Credentials',

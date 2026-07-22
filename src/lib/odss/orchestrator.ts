@@ -69,8 +69,15 @@ export async function runScan(): Promise<void> {
     store.opportunities = opportunities;
     store.recommendations.clear();
 
-    // 5. Build full recommendation for top N opportunities
-    const topN = opportunities.rows.slice(0, 10);
+    // 5. Build full recommendation for a symbol set wide enough to fill BOTH
+    // books (5 CE + 5 PE). Union of: top 12 overall, top 7 CE, top 7 PE — so
+    // the conviction engine never starves one side of scored candidates.
+    const ranked = opportunities.rows;
+    const topCE = ranked.filter(o => o.direction === 'CE').slice(0, 7);
+    const topPE = ranked.filter(o => o.direction === 'PE').slice(0, 7);
+    const unionMap = new Map<string, typeof ranked[number]>();
+    for (const o of [...ranked.slice(0, 12), ...topCE, ...topPE]) unionMap.set(o.symbol, o);
+    const topN = Array.from(unionMap.values());
     const sectorMap = new Map(sectors.sectors.map((s) => [s.sector, s]));
     const rsMap = new Map(rs.rows.map((r) => [r.symbol, r]));
     for (const opp of topN) {

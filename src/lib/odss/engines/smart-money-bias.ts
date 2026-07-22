@@ -31,9 +31,10 @@
  * for the entire trading day.
  */
 
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync } from 'fs';
+import { dataPath, ensureDataDir } from '../data-dir';
 
-const STATE_FILE = '/home/z/odss-data/smart-money-bias.json';
+const STATE_FILE = dataPath('smart-money-bias.json');
 
 export interface SmartMoneyBias {
   // Net positioning (positive = long, negative = short)
@@ -167,7 +168,7 @@ export function saveSmartMoneyBias(bias: SmartMoneyBias): void {
   cachedBias = bias;
   lastFetch = Date.now();
   try {
-    mkdirSync('/home/z/odss-data', { recursive: true });
+    ensureDataDir();
     writeFileSync(STATE_FILE, JSON.stringify(bias));
   } catch {}
 }
@@ -226,7 +227,7 @@ export async function fetchSmartMoneyData(): Promise<SmartMoneyBias | null> {
 
   // Try fetching from bridge
   try {
-    const bridgeConfig = JSON.parse(readFileSync('/home/z/odss-data/bridge-config.json', 'utf-8'));
+    const bridgeConfig = JSON.parse(readFileSync(dataPath('bridge-config.json'), 'utf-8'));
     const bridgeUrl = bridgeConfig.url?.replace(/\/$/, '');
     const bridgeToken = bridgeConfig.token;
 

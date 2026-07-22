@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { readFileSync } from 'fs';
+import { dataPath } from '@/lib/odss/data-dir';
 
 export const dynamic = 'force-dynamic';
 
-const QUOTES_FILE = '/home/z/odss-data/quotes.json';
+const QUOTES_FILE = dataPath('quotes.json');
 let cache: { data: any; ts: number } = { data: null, ts: 0 };
 const CACHE_TTL = 2000;
 

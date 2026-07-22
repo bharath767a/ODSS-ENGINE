@@ -27,6 +27,7 @@ import { fetchRealNews } from '../../src/lib/odss/news/news-fetcher';
 import { archiveNews } from '../../src/lib/odss/news/archive';
 import { archiveLiveQuotes, archiveHistoricalCandles } from '../../src/lib/odss/archive/data-archive';
 import { getMarketSession, shouldEngineBeActive, shouldPollRealData } from '../../src/lib/odss/market-session';
+import { dataPath, ensureDataDir } from '../../src/lib/odss/data-dir';
 import type { Direction } from '../../src/lib/odss/types';
 
 const PORT = 3002;
@@ -52,6 +53,13 @@ const io = new Server(httpServer, {
 });
 
 console.log('[odss-market] Starting service on port', PORT);
+
+// Ensure the runtime data directory (and common subfolders) exist before any
+// state/quote writes. Portable across Windows / Linux / Replit via DATA_DIR.
+ensureDataDir();
+ensureDataDir('pm2-logs');
+ensureDataDir('archive');
+console.log('[odss-market] Data dir ready:', dataPath());
 
 // Initialize: load active trade from DB
 loadActiveTradeFromDb().then(() => {
@@ -90,10 +98,11 @@ console.log('[odss-market] Simulator pre-warmed with 30 ticks');
 //
 // Key symbols fetched: NIFTY, BANKNIFTY, FINNIFTY (indices) +
 // all F&O stocks. India VIX is fetched separately.
-const REAL_DATA_INTERVAL_MS = 10_000; // 10 seconds
+const REAL_DATA_INTERVAL_MS = 5_000; // 5s — aligns with the scan loop for lower latency
 const REAL_DATA_SYMBOLS = ALL_SYMBOLS.map((s) => s.symbol);
 let realDataEnabled = true;
 let lastRealDataFetch = 0;
+let injectInProgress = false; // prevents overlapping fetch cycles at the tighter interval
 let realDataStats = { fetched: 0, failed: 0, lastSuccess: 0 as number | null, source: 'NONE' as string };
 
 // Write quotes to a shared file so the web server can read real prices
@@ -103,7 +112,7 @@ function writeQuotesFile() {
     const nifty = getQuote('NIFTY');
     const bankNifty = getQuote('BANKNIFTY');
     const vix = getIndiaVix();
-    writeFileSync('/home/z/odss-data/quotes.json', JSON.stringify({
+    writeFileSync(dataPath('quotes.json'), JSON.stringify({
       quotes: allQuotes.map((q) => ({ symbol: q.symbol, ltp: q.ltp, prevClose: q.prevClose, open: q.open, high: q.high, low: q.low, volume: q.volume, vwap: q.vwap, changePct: q.changePct, sector: q.sector })),
       nifty: nifty ? { ltp: nifty.ltp, changePct: nifty.changePct, vwap: nifty.vwap, open: nifty.open, high: nifty.high, low: nifty.low } : null,
       bankNifty: bankNifty ? { ltp: bankNifty.ltp, changePct: bankNifty.changePct, vwap: bankNifty.vwap } : null,
@@ -112,8 +121,29 @@ function writeQuotesFile() {
   } catch (e) { console.warn('[odss-market] Failed to write quotes file:', (e as Error).message); }
 }
 
+function injectQuote(sym: string, q: { ltp: number; prevClose: number; open: number; high: number; low: number; volume: number; changePct: number; vwap: number }) {
+  injectRealQuote(sym, { ltp: q.ltp, prevClose: q.prevClose, open: q.open, high: q.high, low: q.low, volume: q.volume, changePct: q.changePct, vwap: q.vwap });
+}
+
+// Yahoo batched fallback (used only when the bridge/Dhan is unavailable).
+async function injectViaYahoo(yahoo: any): Promise<number> {
+  let fetched = 0;
+  const BATCH_SIZE = 5, BATCH_DELAY = 200;
+  for (let i = 0; i < REAL_DATA_SYMBOLS.length; i += BATCH_SIZE) {
+    const batch = REAL_DATA_SYMBOLS.slice(i, i + BATCH_SIZE);
+    const results = await Promise.allSettled(batch.map(async (sym) => {
+      const q = await yahoo.getQuote(sym);
+      if (q && q.ltp > 0) { injectQuote(sym, q); return sym; }
+      return null;
+    }));
+    for (const r of results) if (r.status === 'fulfilled' && r.value) fetched++;
+    if (i + BATCH_SIZE < REAL_DATA_SYMBOLS.length) await new Promise(r => setTimeout(r, BATCH_DELAY));
+  }
+  return fetched;
+}
+
 async function fetchAndInjectRealData() {
-  if (!realDataEnabled) return;
+  if (!realDataEnabled || injectInProgress) return;
 
   // ─── MARKET SESSION CHECK ───
   // When market is closed, reduce polling to 5 min (saves API quota)
@@ -121,77 +151,47 @@ async function fetchAndInjectRealData() {
     if (Date.now() - lastRealDataFetch < 5 * 60 * 1000) return;
     console.log('[odss-market] Market closed — polling real data at reduced frequency (5 min)');
   }
+  injectInProgress = true;
   lastRealDataFetch = Date.now();
-  console.log('[odss-market] fetchAndInjectRealData: starting...');
   try {
     const router = getDataRouter();
-    // Use YAHOO for quotes (most reliable), BRIDGE for option chains only
-    // This ensures real prices always flow even if bridge/ngrok goes down
-    const yahooProvider = router.getProvider('YAHOO');
-    if (!yahooProvider) {
-      console.warn('[odss-market] Yahoo provider not available');
-      return;
-    }
-    console.log('[odss-market] Using YAHOO for quotes, BRIDGE for option chains...');
+    const bridge = router.getProvider('BRIDGE' as any);
+    const yahoo = router.getProvider('YAHOO');
 
-    // Fetch India VIX
-    try {
-      const vix = await yahooProvider.getIndiaVIX();
-      console.log(`[odss-market] VIX: ${vix} from YAHOO`);
-      if (vix > 0 && vix < 200) {
-        injectRealVix(vix);
-        realDataStats.source = 'YAHOO';
-      }
-    } catch (e) {
-      console.warn('[odss-market] VIX fetch failed:', (e as Error).message);
-    }
+    // VIX always from Yahoo — the bridge has no dedicated VIX feed.
+    try { const vix = await yahoo?.getIndiaVIX(); if (vix && vix > 0 && vix < 200) injectRealVix(vix); }
+    catch (e) { console.warn('[odss-market] VIX fetch failed:', (e as Error).message); }
 
-    // Fetch ALL quotes via Yahoo (batch of 5, reliable)
+    // PRIMARY: bridge → Dhan real quotes (one batched call for all symbols,
+    // with Yahoo fallback handled inside the bridge). Falls back to direct
+    // Yahoo only if the bridge is down / returns nothing.
     let fetched = 0;
-    const BATCH_SIZE = 5;
-    const BATCH_DELAY = 200;
-
-    for (let i = 0; i < REAL_DATA_SYMBOLS.length; i += BATCH_SIZE) {
-      const batch = REAL_DATA_SYMBOLS.slice(i, i + BATCH_SIZE);
-      const results = await Promise.allSettled(
-        batch.map(async (sym) => {
-          const q = await yahooProvider.getQuote(sym);
-          if (q && q.ltp > 0) {
-            injectRealQuote(sym, {
-              ltp: q.ltp,
-              prevClose: q.prevClose,
-              open: q.open,
-              high: q.high,
-              low: q.low,
-              volume: q.volume,
-              changePct: q.changePct,
-              vwap: q.vwap,
-            });
-            return sym;
-          }
-          return null;
-        }),
-      );
-      for (const r of results) {
-        if (r.status === 'fulfilled' && r.value) fetched++;
-      }
-      if (i + BATCH_SIZE < REAL_DATA_SYMBOLS.length) {
-        await new Promise(r => setTimeout(r, BATCH_DELAY));
+    let source = 'NONE';
+    if (bridge && bridge.isConfigured()) {
+      try {
+        const quotes = await bridge.getAllQuotes(REAL_DATA_SYMBOLS);
+        for (const [sym, q] of quotes) {
+          if (q && q.ltp > 0) { injectQuote(sym, q); fetched++; }
+        }
+        if (fetched > 0) source = 'BRIDGE';
+      } catch (e) {
+        console.warn('[odss-market] Bridge quotes failed, falling back to Yahoo:', (e as Error).message);
       }
     }
+    if (fetched === 0 && yahoo) { fetched = await injectViaYahoo(yahoo); if (fetched > 0) source = 'YAHOO'; }
 
     realDataStats.fetched = fetched;
-    realDataStats.lastSuccess = Date.now();
-    if (fetched > 0) {
-      realDataStats.source = 'YAHOO';
-      console.log(`[odss-market] Cycle complete: ${fetched} quotes from YAHOO`);
-    }
+    realDataStats.source = source;
+    if (fetched > 0) realDataStats.lastSuccess = Date.now();
     lastRealDataFetch = Date.now();
     writeQuotesFile();
     try { archiveLiveQuotes(getAllQuotes()); } catch {}
+    console.log(`[odss-market] Real data cycle: ${fetched} quotes from ${source}`);
   } catch (e) {
     realDataStats.failed++;
     console.warn('[odss-market] Real data fetch error:', (e as Error).message);
+  } finally {
+    injectInProgress = false;
   }
 }
 
@@ -336,7 +336,7 @@ setInterval(async () => {
         completedTrades: store.completedTrades.slice(0, 20),
         lastScanAt: store.lastScanAt,
       };
-      writeFileSync('/home/z/odss-data/engine-state.json', JSON.stringify(stateData));
+      writeFileSync(dataPath('engine-state.json'), JSON.stringify(stateData));
     } catch {}
 
     io.emit('odss:update', {

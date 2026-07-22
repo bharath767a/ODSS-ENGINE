@@ -7,7 +7,7 @@
  *   3. Option chain snapshots (every 5 minutes)
  *   4. News items (already archived in news-archive.json)
  *
- * Storage: /home/z/odss-data/archive/
+ * Storage: <DATA_DIR>/archive/
  *   - quotes/YYYY-MM-DD.jsonl      (all quotes for that day, append-only)
  *   - historical/{SYMBOL}.json     (daily candles, append new days only)
  *   - optionchains/YYYY-MM-DD.jsonl(option chain snapshots)
@@ -18,8 +18,9 @@
 
 import { writeFileSync, readFileSync, existsSync, mkdirSync, appendFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
+import { dataPath } from '../data-dir';
 
-const ARCHIVE_DIR = '/home/z/odss-data/archive';
+const ARCHIVE_DIR = dataPath('archive');
 const QUOTES_DIR = join(ARCHIVE_DIR, 'quotes');
 const HISTORICAL_DIR = join(ARCHIVE_DIR, 'historical');
 const OPTIONCHAINS_DIR = join(ARCHIVE_DIR, 'optionchains');

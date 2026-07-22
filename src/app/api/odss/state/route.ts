@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { readFileSync } from 'fs';
+import { dataPath } from '@/lib/odss/data-dir';
 
 export const dynamic = 'force-dynamic';
 
 // GET /api/odss/state — full current ODSS state snapshot
 // Reads from the shared state file written by the market service every scan.
-const STATE_FILE = '/home/z/odss-data/engine-state.json';
+const STATE_FILE = dataPath('engine-state.json');
 let cache: { data: any; ts: number } = { data: null, ts: 0 };
 const CACHE_TTL = 2000;
 

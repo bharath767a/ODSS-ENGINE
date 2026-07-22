@@ -24,8 +24,9 @@ import { rateLimiter } from './types';
 import type { Quote, OptionChain } from '../types';
 import { getSymbolMeta } from '../universe';
 import { readFileSync } from 'fs';
+import { dataPath } from '../data-dir';
 
-const BRIDGE_CONFIG_FILE = '/home/z/odss-data/bridge-config.json';
+const BRIDGE_CONFIG_FILE = dataPath('bridge-config.json');
 
 interface BridgeConfig {
   url: string;

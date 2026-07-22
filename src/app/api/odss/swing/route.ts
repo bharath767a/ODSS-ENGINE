@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { STOCKS, type SymbolMeta } from '@/lib/odss/universe';
 import { readFileSync } from 'fs';
+import { dataPath } from '@/lib/odss/data-dir';
 
 export const dynamic = 'force-dynamic';
 
@@ -64,7 +65,7 @@ async function buildRecommendations(): Promise<SwingRecommendation[]> {
   // Read real prices from shared quotes file (written by market service every 10s)
   let liveQuotes: Record<string, any> = {};
   try {
-    const raw = readFileSync('/home/z/odss-data/quotes.json', 'utf-8');
+    const raw = readFileSync(dataPath('quotes.json'), 'utf-8');
     const all = JSON.parse(raw);
     for (const q of all.quotes ?? []) {
       liveQuotes[q.symbol] = q;

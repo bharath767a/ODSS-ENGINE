@@ -1,24 +1,69 @@
 /**
- * ODSS - Conviction Engine (v2 — Anti-Shuffle)
+ * ODSS - Conviction Engine (v3 — Stable Dual-Book + Room-to-Run + Prime Picks)
+ * ============================================================================
  *
- * FIXES from v1:
- *   1. Score history + lock state now PERSISTED to disk (survives restarts)
- *   2. convictionPicks order is HELD STABLE (not re-sorted every scan)
- *   3. Hysteresis band: promote at 55, demote at 45 (prevents flickering)
- *   4. Lock extends to ALL 3 ranks (not just rank 1)
- *   5. No re-sorting — picks keep their position until demoted
+ * WHAT CHANGED vs v2 (and WHY the picks stop reshuffling)
+ * ------------------------------------------------------
+ * v2 kept a single mixed set of ≤5 picks and the dashboard re-derived CE/PE
+ * lists from `topRecommendations`, which re-sorted every 5s scan → visible
+ * shuffling. v3 fixes this at the source:
+ *
+ *   1. TWO independent stable books: up to 5 CE and up to 5 PE, each with its
+ *      own hysteresis + dwell-time so membership changes slowly and only for a
+ *      good reason. Display order is EVENT-DRIVEN (frozen between promote/demote
+ *      events), so a pick never jumps rows on score jitter.
+ *
+ *   2. Every candidate is scored on an EMA-smoothed composite so single-scan
+ *      score spikes cannot promote/demote anything.
+ *
+ *   3. A real "MOVE-STILL-LEFT" (room) score — the thing the trader actually
+ *      cares about: is there room to the target, or is the move exhausted?
+ *      Built from RSI zone, extension from VWAP, distance to the nearest
+ *      technical level + option-chain OI wall, how much the stock has already
+ *      moved today, and whether we're at a fresh breakout / clean pullback.
+ *
+ *   4. FUNDAMENTAL fit (cached once per trading day) so a pick is "sound" not
+ *      just fast — used mainly to break ties and to qualify PRIME picks.
+ *
+ *   5. PRIME PICKS: the best 1–2 to actually take right now. A pick only earns
+ *      PRIME if it is technically sound AND fundamentally acceptable AND still
+ *      has room. If nothing qualifies, we return none (better than forcing a
+ *      mediocre "best").
+ *
+ * Backward compatibility: the ConvictionOutput still exposes convictionPicks,
+ * watchlist, lockedPick, newsShockPicks, updatedAt. New fields (cePicks,
+ * pePicks, primePicks, and the extra per-pick scores) are additive.
  */
 import { getRecentArchived } from '../news/archive';
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
-import type { OpportunityRow, Recommendation } from '../types';
+import { readFileSync, writeFileSync } from 'fs';
+import { dataPath, ensureDataDir } from '../data-dir';
+import type {
+  OpportunityRow,
+  Recommendation,
+  Direction,
+  TechnicalEngineOutput,
+  OptionChainEngineOutput,
+} from '../types';
+import { getFundamentalProvider } from '../fundamentals/provider';
+import { analyzeFundamentals } from '../fundamentals/analyzer';
 
 export type EntrySignal = 'ENTER_NOW' | 'WAIT' | 'AVOID';
 export type StabilityClass = 'STABLE' | 'MODERATE' | 'VOLATILE';
 
 export interface ConvictionPick {
-  symbol: string; sector: string; direction: 'CE' | 'PE'; rank: number;
+  symbol: string; sector: string; direction: Direction; rank: number;
   technicalScore: number; optionChainScore: number; convictionScore: number;
   originalScore: number; confidence: number;
+  // ── v3 additive score breakdown ──
+  technicalHealth: number;     // 0-100 direction-aware technical soundness
+  roomScore: number;           // 0-100 "move still left"
+  roomNotes: string[];         // human-readable room rationale
+  fundamentalScore: number;    // 0-100 (daily cached)
+  fundamentalRating: string;   // EXCELLENT..POOR or N/A
+  primeScore: number;          // 0-100 actionability (best-to-take-now)
+  isPrime: boolean;            // one of the top-2 to take now
+  whyBest: string;             // one-line rationale when isPrime
+  // ── stability / news ──
   stability: StabilityClass; stabilityScore: number; trendScore: number; consecutiveTop10: number;
   newsMomentum: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL'; newsBoost: number; newsHeadlines: string[]; hasEarningsNews: boolean;
   entrySignal: EntrySignal; entryZoneLow: number; entryZoneHigh: number; currentPrice: number; stopLoss: number; riskRewardRatio: number;
@@ -28,7 +73,10 @@ export interface ConvictionPick {
 }
 
 export interface ConvictionOutput {
-  convictionPicks: ConvictionPick[];
+  convictionPicks: ConvictionPick[];   // legacy: prime + remaining (top, mixed)
+  cePicks: ConvictionPick[];           // v3: stable bullish book (≤5)
+  pePicks: ConvictionPick[];           // v3: stable bearish book (≤5)
+  primePicks: ConvictionPick[];        // v3: best 1-2 to take right now
   watchlist: ConvictionPick[];
   lockedPick: ConvictionPick | null;
   newsShockPicks: ConvictionPick[];
@@ -36,93 +84,301 @@ export interface ConvictionOutput {
 }
 
 // ============================================================
-// PERSISTED STATE (survives restarts)
+// TUNABLES  (5s scan cadence → thresholds are in "scans")
 // ============================================================
-
-const STATE_FILE = '/home/z/odss-data/conviction-state.json';
-const HISTORY_SIZE = 12;
-const PROMOTION_THRESHOLD = 5;   // must be in Top 10 for 5 consecutive scans (25s)
-const PROMOTION_SCORE = 55;      // must score 55+ to be promoted
-const DEMOTION_SCORE = 30;       // must drop below 30 to be demoted (very wide hysteresis)
-const MIN_DWELL_SCANS = 12;      // must stay in set for 12 scans (60s) before demotion
+const STATE_FILE = dataPath('conviction-state.json');
+const HISTORY_SIZE = 20;
+const EMA_ALPHA = 0.25;            // smoothing for composite score (~4-8 scans)
+const CANDIDATE_TOP_K = 8;         // per side, how deep in the book we consider
+const PROMO_SCANS = 4;             // consecutive candidacy required to promote (~20s)
+const PROMO_SCORE = 55;            // EMA composite needed to promote
+const DEMOTE_SCORE = 42;           // below this (EMA) for DWELL_MIN scans → demote
+const DWELL_MIN = 10;              // min scans in book before demotion eligible (~50s)
+const ABSENCE_LIMIT = 10;          // scans absent from candidate pool → drop
+const SWAP_MARGIN = 7;             // challenger must beat weakest incumbent by this…
+const SWAP_SCANS = 6;              // …for this many consecutive scans to force a swap
+                                   // (7-pt EMA gap held 6 scans ≈ a real regime shift,
+                                   //  not jitter — EMA smoothing filters noise)
+const MAX_PER_SIDE = 5;
 const LOCK_DURATION_MS = 5 * 60 * 1000;
+const WATCHLIST_MIN_SCORE = 45;
+const WATCHLIST_MAX = 6;
+const WATCHLIST_ABSENCE_LIMIT = 8;
+// Prime qualification gates
+const PRIME_MIN_TECH = 55;
+const PRIME_MIN_ROOM = 48;
+const PRIME_MIN_CONVICTION = 58;
 
-interface ScoreRecord { symbol: string; score: number; timestamp: number; inTop10: boolean; }
+// ============================================================
+// PERSISTED STATE
+// ============================================================
+interface ScoreRecord { symbol: string; score: number; timestamp: number; inTop: boolean; }
+interface SideState {
+  set: string[];                       // authoritative display order (stable)
+  dwell: Record<string, number>;       // scans since promoted
+  candidacy: Record<string, number>;   // consecutive scans as candidate (pre-promo)
+  absence: Record<string, number>;     // scans absent from candidate pool
+  challenge: Record<string, number>;   // consecutive scans a challenger beats weakest incumbent
+}
 interface PersistedState {
   scoreHistory: Record<string, ScoreRecord[]>;
+  ema: Record<string, number>;
+  ce: SideState;
+  pe: SideState;
+  fundamentals: { day: string; scores: Record<string, { total: number; rating: string }> };
   lockedSymbol: string | null;
   lockExpiresAt: number;
-  convictionSet: string[];
-  convictionOrder: string[];
-  convictionDwell: Record<string, number>;
   watchlistOrder: string[];
+  watchlistAbsence: Record<string, number>;
 }
 
+function emptySide(): SideState { return { set: [], dwell: {}, candidacy: {}, absence: {}, challenge: {} }; }
+
 let scoreHistory = new Map<string, ScoreRecord[]>();
+let ema = new Map<string, number>();
+let ce = emptySide();
+let pe = emptySide();
+let fundamentals: PersistedState['fundamentals'] = { day: '', scores: {} };
 let lockedSymbol: string | null = null;
 let lockExpiresAt = 0;
-let convictionSet = new Set<string>();
-let convictionOrder: string[] = [];
-let convictionDwell = new Map<string, number>();
 let watchlistOrder: string[] = [];
+let watchlistAbsence = new Map<string, number>();
 let stateLoaded = false;
+
+// In-memory snapshot of the last fully-scored pick per symbol (so a symbol that
+// temporarily drops out of the recommendation set keeps rendering its last data).
+const lastPick = new Map<string, ConvictionPick>();
 
 function loadState(): void {
   if (stateLoaded) return;
   stateLoaded = true;
   try {
-    const raw = readFileSync(STATE_FILE, 'utf-8');
-    const data: PersistedState = JSON.parse(raw);
+    const data: PersistedState = JSON.parse(readFileSync(STATE_FILE, 'utf-8'));
     scoreHistory = new Map(Object.entries(data.scoreHistory || {}));
+    ema = new Map(Object.entries(data.ema || {}));
+    ce = { ...emptySide(), ...(data.ce || {}) };
+    pe = { ...emptySide(), ...(data.pe || {}) };
+    fundamentals = data.fundamentals || { day: '', scores: {} };
     lockedSymbol = data.lockedSymbol ?? null;
     lockExpiresAt = data.lockExpiresAt ?? 0;
-    convictionSet = new Set(data.convictionSet || []);
-    convictionOrder = data.convictionOrder || [];
-    convictionDwell = new Map(Object.entries(data.convictionDwell || {}));
     watchlistOrder = data.watchlistOrder || [];
-  } catch {
-    // File doesn't exist yet — start fresh
-  }
+    watchlistAbsence = new Map(Object.entries(data.watchlistAbsence || {}));
+  } catch { /* fresh start */ }
 }
 
 function saveState(): void {
   try {
-    mkdirSync('/home/z/odss-data', { recursive: true });
+    ensureDataDir();
     const data: PersistedState = {
       scoreHistory: Object.fromEntries(scoreHistory),
-      lockedSymbol,
-      lockExpiresAt,
-      convictionSet: Array.from(convictionSet),
-      convictionOrder,
-      convictionDwell: Object.fromEntries(convictionDwell),
+      ema: Object.fromEntries(ema),
+      ce, pe, fundamentals,
+      lockedSymbol, lockExpiresAt,
       watchlistOrder,
+      watchlistAbsence: Object.fromEntries(watchlistAbsence),
     };
     writeFileSync(STATE_FILE, JSON.stringify(data));
-  } catch {}
+  } catch { /* best effort */ }
 }
 
-function recordScore(symbol: string, score: number, inTop10: boolean): void {
+// ============================================================
+// SMALL HELPERS
+// ============================================================
+const clamp = (x: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, x));
+/** Triangular preference: 100 at `ideal`, linearly down to 0 at ±`half`. */
+function bell(x: number, ideal: number, half: number): number {
+  return clamp(100 - (Math.abs(x - ideal) / half) * 100);
+}
+
+function istDayKey(now: number): string {
+  // IST = UTC+5:30. Trading day rolls at midnight IST.
+  const ist = new Date(now + 5.5 * 3600 * 1000);
+  return `${ist.getUTCFullYear()}-${ist.getUTCMonth() + 1}-${ist.getUTCDate()}`;
+}
+
+function recordScore(symbol: string, score: number, inTop: boolean): void {
   let h = scoreHistory.get(symbol);
   if (!h) { h = []; scoreHistory.set(symbol, h); }
-  h.push({ symbol, score, timestamp: Date.now(), inTop10 });
+  h.push({ symbol, score, timestamp: Date.now(), inTop });
   if (h.length > HISTORY_SIZE) h.shift();
+  const prev = ema.get(symbol);
+  ema.set(symbol, prev === undefined ? score : prev + EMA_ALPHA * (score - prev));
 }
+const emaOf = (symbol: string) => ema.get(symbol) ?? 0;
 
 function calculateStability(symbol: string) {
   const h = scoreHistory.get(symbol) ?? [];
-  if (h.length < 3) return { score: 30, class: 'VOLATILE' as StabilityClass, consecutiveTop10: 0, trend: 0 };
-  let consecutiveTop10 = 0;
-  for (let i = h.length - 1; i >= 0; i--) { if (h[i].inTop10) consecutiveTop10++; else break; }
+  if (h.length < 3) return { score: 35, class: 'VOLATILE' as StabilityClass, consecutiveTop: 0, trend: 0 };
+  let consecutiveTop = 0;
+  for (let i = h.length - 1; i >= 0; i--) { if (h[i].inTop) consecutiveTop++; else break; }
   const scores = h.map(x => x.score);
   const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
   const variance = scores.reduce((a, b) => a + (b - mean) ** 2, 0) / scores.length;
-  const stabilityScore = Math.max(0, Math.min(100, 100 - Math.sqrt(variance) * 4));
+  const stabilityScore = clamp(100 - Math.sqrt(variance) * 4);
   let trend = 0;
-  if (h.length >= 6) { const r = h.slice(-3).map(x=>x.score); const o = h.slice(-6,-3).map(x=>x.score); trend = (r.reduce((a,b)=>a+b,0)/r.length) - (o.reduce((a,b)=>a+b,0)/o.length); }
-  else if (h.length >= 2) trend = h[h.length-1].score - h[0].score;
-  return { score: stabilityScore, class: (stabilityScore >= 75 ? 'STABLE' : stabilityScore >= 50 ? 'MODERATE' : 'VOLATILE') as StabilityClass, consecutiveTop10, trend };
+  if (h.length >= 6) { const r = h.slice(-3).map(x => x.score); const o = h.slice(-6, -3).map(x => x.score); trend = (r.reduce((a, b) => a + b, 0) / r.length) - (o.reduce((a, b) => a + b, 0) / o.length); }
+  else if (h.length >= 2) trend = h[h.length - 1].score - h[0].score;
+  return { score: stabilityScore, class: (stabilityScore >= 75 ? 'STABLE' : stabilityScore >= 50 ? 'MODERATE' : 'VOLATILE') as StabilityClass, consecutiveTop, trend };
 }
 
+// ─── Fundamentals: computed once per trading day, cached in state ───
+function getFundamentalScore(symbol: string, now: number): { total: number; rating: string } {
+  const day = istDayKey(now);
+  if (fundamentals.day !== day) fundamentals = { day, scores: {} };
+  const cached = fundamentals.scores[symbol];
+  if (cached) return cached;
+  let out = { total: 50, rating: 'N/A' };
+  try {
+    const data = getFundamentalProvider().getFundamentalData(symbol);
+    if (data) { const s = analyzeFundamentals(data); out = { total: Math.round(s.total), rating: s.rating }; }
+  } catch { /* keep neutral default */ }
+  fundamentals.scores[symbol] = out;
+  return out;
+}
+
+// ============================================================
+// DIRECTION-AWARE SUB-SCORES
+// ============================================================
+
+/** Technical soundness in the trade's direction (0-100). */
+function technicalHealth(dir: Direction, t: TechnicalEngineOutput): number {
+  if (!t) return 50;
+  const bull = dir === 'CE';
+  let s = 0, w = 0;
+  const add = (val: number, weight: number) => { s += val * weight; w += weight; };
+  // Trend / EMA alignment
+  add(t.trend === (bull ? 'BULLISH' : 'BEARISH') ? 100 : t.trend === 'NEUTRAL' ? 50 : 10, 1.2);
+  add(t.emaAlignment === (bull ? 'BULLISH' : 'BEARISH') ? 100 : t.emaAlignment === 'MIXED' ? 50 : 15, 1.0);
+  // ADX = trend strength (direction-agnostic, but strong trend helps a directional trade)
+  add(clamp((t.adx ?? 15) * 2.5), 0.8);
+  // VWAP position confirms side
+  add(t.vwapPosition === (bull ? 'ABOVE' : 'BELOW') ? 100 : t.vwapPosition === 'AT' ? 55 : 20, 0.9);
+  // Momentum sign
+  add(clamp(50 + (bull ? 1 : -1) * (t.momentum ?? 0) * 5), 0.8);
+  // Volume backing the move
+  add(t.volumeStructure === 'RISING' ? 85 : t.volumeStructure === 'FLAT' ? 50 : 30, 0.5);
+  // Base engine score as a prior
+  add(clamp(t.score ?? 50), 0.8);
+  return clamp(w > 0 ? s / w : 50);
+}
+
+/** Option-chain confluence in the trade's direction (0-100). */
+function optionChainHealth(dir: Direction, oc: OptionChainEngineOutput): number {
+  if (!oc) return 50;
+  const bull = dir === 'CE';
+  let s = 0, w = 0;
+  const add = (val: number, weight: number) => { s += val * weight; w += weight; };
+  // Engine's own OC score
+  add(clamp(oc.score ?? 50), 1.0);
+  // Bias / PCR agreement (bull wants LONG bias / higher PCR)
+  add(oc.bias === (bull ? 'LONG' : 'SHORT') ? 100 : oc.bias === 'NEUTRAL' ? 50 : 20, 1.0);
+  add(oc.pcrSignal === (bull ? 'LONG' : 'SHORT') ? 90 : oc.pcrSignal === 'NEUTRAL' ? 50 : 25, 0.7);
+  // Writing trends: bull → put writing increasing (support) / call writing decreasing
+  if (bull) {
+    add(oc.putWritingTrend === 'INCREASING' ? 90 : oc.putWritingTrend === 'FLAT' ? 55 : 30, 0.6);
+    add(oc.callWritingTrend === 'DECREASING' ? 85 : oc.callWritingTrend === 'FLAT' ? 55 : 35, 0.5);
+  } else {
+    add(oc.callWritingTrend === 'INCREASING' ? 90 : oc.callWritingTrend === 'FLAT' ? 55 : 30, 0.6);
+    add(oc.putWritingTrend === 'DECREASING' ? 85 : oc.putWritingTrend === 'FLAT' ? 55 : 35, 0.5);
+  }
+  // Unwinding that supports the side
+  add(oc.unwinding === (bull ? 'CALL_UNWINDING' : 'PUT_UNWINDING') ? 80 : 50, 0.4);
+  return clamp(w > 0 ? s / w : 50);
+}
+
+/**
+ * "MOVE STILL LEFT" (room) score, 0-100, with human-readable notes.
+ * High = fresh move with room to target. Low = exhausted / at a wall / already run.
+ */
+function roomToRun(
+  dir: Direction, ltp: number, changePct: number,
+  t: TechnicalEngineOutput, oc: OptionChainEngineOutput,
+): { score: number; notes: string[] } {
+  const notes: string[] = [];
+  if (!t || ltp <= 0) return { score: 50, notes: ['Insufficient data for room estimate'] };
+  const bull = dir === 'CE';
+  const atr = (t.atr && t.atr > 0) ? t.atr : Math.max(ltp * 0.008, 0.01);
+  let s = 0, w = 0;
+  const add = (val: number, weight: number) => { s += clamp(val) * weight; w += weight; };
+
+  // 1) RSI zone — trending with room, not exhausted
+  const rsi = t.rsi ?? 50;
+  if (bull) {
+    // ideal ~60, still-has-room band 50-70; >78 exhausted; <45 no thrust
+    let r = bell(rsi, 60, 22);
+    if (rsi > 78) { r = Math.min(r, 15); notes.push(`RSI ${rsi.toFixed(0)} overbought — move likely exhausted`); }
+    else if (rsi >= 52 && rsi <= 68) notes.push(`RSI ${rsi.toFixed(0)} — trending with room`);
+    add(r, 1.2);
+  } else {
+    let r = bell(rsi, 40, 22);
+    if (rsi < 22) { r = Math.min(r, 15); notes.push(`RSI ${rsi.toFixed(0)} oversold — bounce risk`); }
+    else if (rsi >= 32 && rsi <= 48) notes.push(`RSI ${rsi.toFixed(0)} — falling with room`);
+    add(r, 1.2);
+  }
+
+  // 2) Extension from VWAP (in ATRs). Close to VWAP = room; far = stretched.
+  if (t.vwap && t.vwap > 0) {
+    const extAtr = (ltp - t.vwap) / atr * (bull ? 1 : -1); // + = in-favor extension
+    // 0-1 ATR beyond vwap = healthy(100→70); >2.5 ATR = stretched(→10); below vwap in-favor side handled as room
+    let r: number;
+    if (extAtr <= 0) r = 85;                       // pulled back to/through vwap: lots of room
+    else if (extAtr <= 1) r = 100 - extAtr * 20;   // 100→80
+    else if (extAtr <= 2.5) r = 80 - (extAtr - 1) * 40; // 80→20
+    else { r = 12; notes.push(`Stretched ${extAtr.toFixed(1)} ATR from VWAP — extended`); }
+    add(r, 1.0);
+  }
+
+  // 3) Distance to the nearest blocking level (technical + OI wall), in ATRs
+  const levels: number[] = [];
+  if (bull) {
+    for (const r of (t.resistance ?? [])) if (r > ltp) levels.push(r);
+    if (oc?.resistanceStrike && oc.resistanceStrike > ltp) levels.push(oc.resistanceStrike);
+  } else {
+    for (const sup of (t.support ?? [])) if (sup < ltp) levels.push(sup);
+    if (oc?.supportStrike && oc.supportStrike < ltp && oc.supportStrike > 0) levels.push(oc.supportStrike);
+  }
+  if (levels.length) {
+    const nearest = bull ? Math.min(...levels) : Math.max(...levels);
+    const distAtr = Math.abs(nearest - ltp) / atr;
+    // <0.5 ATR to wall = capped(15); >3 ATR = wide open(100)
+    const r = clamp((distAtr / 3) * 100);
+    if (distAtr < 0.6) notes.push(`Only ${distAtr.toFixed(1)} ATR to ${bull ? 'resistance' : 'support'} ${nearest.toFixed(0)} — capped`);
+    else if (distAtr > 2) notes.push(`~${distAtr.toFixed(1)} ATR of clear room to ${nearest.toFixed(0)}`);
+    add(r, 1.1);
+  } else {
+    add(75, 0.6); // no visible wall in-path → assume room
+  }
+
+  // 4) How much has it already moved today? Big move already = less left + IV rich.
+  const absMove = Math.abs(changePct);
+  const inFavor = bull ? changePct > 0 : changePct < 0;
+  if (inFavor) {
+    const r = absMove <= 1 ? 95 : absMove <= 2 ? 80 : absMove <= 3 ? 60 : absMove <= 4 ? 40 : 20;
+    if (absMove > 3.5) notes.push(`Already ${changePct.toFixed(1)}% today — much of the move may be done`);
+    add(r, 0.9);
+  } else {
+    add(70, 0.5); // moving against/flat → fresh entry potential if setup valid
+  }
+
+  // 5) Fresh-move bonuses: breakout in-favor / clean pullback entry
+  const bo = t.breakout?.status;
+  if (bo === (bull ? 'BREAKING_OUT' : 'BREAKING_DOWN')) { add(95, 0.7); notes.push('Fresh breakout — early in the move'); }
+  const pb = t.pullback?.status;
+  if (pb === 'AT_VWAP' || pb === 'AT_SUPPORT') { add(88, 0.6); notes.push(`Clean ${pb === 'AT_VWAP' ? 'VWAP' : 'support'} pullback entry`); }
+
+  const score = clamp(w > 0 ? s / w : 50);
+  if (!notes.length) notes.push(score >= 60 ? 'Room to target intact' : 'Limited room remaining');
+  return { score: Math.round(score), notes };
+}
+
+/** Fundamental fit for the direction (bull rewards strong; bear rewards weak, but mildly). */
+function fundamentalFit(dir: Direction, total: number): number {
+  return dir === 'CE' ? total : clamp(40 + (100 - total) * 0.5);
+}
+
+// ============================================================
+// NEWS + ENTRY + SHOCKS  (reused from v2)
+// ============================================================
 function calculateNewsMomentum(symbol: string, sector: string) {
   try {
     const recent = getRecentArchived(12);
@@ -144,7 +400,7 @@ function calculateNewsMomentum(symbol: string, sector: string) {
   } catch { return { direction: 'NEUTRAL' as const, boost: 0, headlines: [] as string[], hasEarnings: false }; }
 }
 
-function calculateEntryZone(price: number, direction: 'CE' | 'PE') {
+function calculateEntryZone(price: number, direction: Direction) {
   if (price <= 0) return { low: 0, high: 0, stopLoss: 0, riskReward: 0 };
   return { low: price * 0.997, high: price * 1.003, stopLoss: direction === 'CE' ? price * 0.985 : price * 1.015, riskReward: 2 };
 }
@@ -171,226 +427,294 @@ function detectNewsShocks(liveQuotes: Record<string, { ltp: number; changePct: n
   } catch { return []; }
 }
 
+// ============================================================
+// PER-SIDE STABLE BOOK MANAGEMENT
+// ============================================================
+function processSide(
+  side: SideState,
+  dir: Direction,
+  candidatesRanked: string[],           // this side's candidates, best→worst (by EMA)
+  scored: Map<string, ConvictionPick>,  // fully-scored picks available this scan
+): void {
+  const candidateSet = new Set(candidatesRanked);
+
+  // Drop members that flipped side or vanished from the universe for too long.
+  for (const sym of [...side.set]) {
+    const pick = scored.get(sym) ?? lastPick.get(sym);
+    if (pick && pick.direction !== dir) { removeFromSide(side, sym); continue; }
+    if (candidateSet.has(sym)) side.absence[sym] = 0;
+    else side.absence[sym] = (side.absence[sym] ?? 0) + 1;
+    if ((side.absence[sym] ?? 0) >= ABSENCE_LIMIT) removeFromSide(side, sym);
+  }
+
+  // Increment dwell for current members.
+  for (const sym of side.set) side.dwell[sym] = (side.dwell[sym] ?? 0) + 1;
+
+  // Candidacy counters (for promotion) — only for non-members.
+  for (const sym of candidatesRanked) {
+    if (side.set.includes(sym)) continue;
+    const emaScore = emaOf(sym);
+    side.candidacy[sym] = emaScore >= PROMO_SCORE ? (side.candidacy[sym] ?? 0) + 1 : 0;
+  }
+  // Reset candidacy for anything not currently a candidate.
+  for (const sym of Object.keys(side.candidacy)) {
+    if (!candidateSet.has(sym)) side.candidacy[sym] = 0;
+  }
+
+  // Promote into free slots (best candidates first).
+  for (const sym of candidatesRanked) {
+    if (side.set.length >= MAX_PER_SIDE) break;
+    if (side.set.includes(sym)) continue;
+    if ((side.candidacy[sym] ?? 0) >= PROMO_SCANS && emaOf(sym) >= PROMO_SCORE) {
+      side.set.push(sym);
+      side.dwell[sym] = 1;
+      side.candidacy[sym] = 0;
+      side.absence[sym] = 0;
+    }
+  }
+
+  // Demote members that have gone cold (only after minimum dwell).
+  for (const sym of [...side.set]) {
+    if (emaOf(sym) < DEMOTE_SCORE && (side.dwell[sym] ?? 0) >= DWELL_MIN) removeFromSide(side, sym);
+  }
+
+  // Challenge swap: when the book is full, a clearly-better outsider can force in
+  // the weakest incumbent — but only after sustained outperformance.
+  if (side.set.length >= MAX_PER_SIDE) {
+    const weakest = side.set.reduce((a, b) => (emaOf(b) < emaOf(a) ? b : a));
+    const weakestEma = emaOf(weakest);
+    let swapped = false;
+    for (const sym of candidatesRanked) {
+      if (side.set.includes(sym)) { side.challenge[sym] = 0; continue; }
+      if (emaOf(sym) >= weakestEma + SWAP_MARGIN) {
+        side.challenge[sym] = (side.challenge[sym] ?? 0) + 1;
+        if (!swapped && (side.dwell[weakest] ?? 0) >= DWELL_MIN && side.challenge[sym] >= SWAP_SCANS) {
+          removeFromSide(side, weakest);
+          side.set.push(sym);
+          side.dwell[sym] = 1; side.absence[sym] = 0; side.challenge[sym] = 0;
+          swapped = true;
+        }
+      } else {
+        side.challenge[sym] = 0;
+      }
+    }
+  }
+
+  // Event-driven ordering: keep display order STABLE, but if membership changed
+  // we re-sort by EMA once so the book stays roughly quality-ordered. We detect
+  // "changed" by comparing to a stored signature.
+  const sig = side.set.join(',');
+  if ((side as any)._sig !== sig) {
+    side.set.sort((a, b) => emaOf(b) - emaOf(a));
+    (side as any)._sig = side.set.join(',');
+  }
+}
+
+function removeFromSide(side: SideState, sym: string): void {
+  side.set = side.set.filter(s => s !== sym);
+  delete side.dwell[sym]; delete side.absence[sym]; delete side.candidacy[sym]; delete side.challenge[sym];
+}
+
+// ============================================================
+// MAIN
+// ============================================================
 export function runConvictionEngine(
   opportunities: OpportunityRow[],
   recommendations: Map<string, Recommendation>,
   liveQuotes: Record<string, { ltp: number; changePct: number }>,
 ): ConvictionOutput {
-  loadState(); // Load persisted state on first call
+  loadState();
   const now = Date.now();
 
-  // Step 1: Record scores
-  const top10Symbols = new Set(opportunities.slice(0, 10).map(o => o.symbol));
-  for (const opp of opportunities) recordScore(opp.symbol, opp.totalScore, top10Symbols.has(opp.symbol));
+  // ── Step 1: score every opportunity that has a full recommendation ──
+  const topSymbols = new Set(opportunities.slice(0, 12).map(o => o.symbol));
+  const scored = new Map<string, ConvictionPick>();
 
-  // Step 2: Build all picks with scores
-  const allPicksMap = new Map<string, ConvictionPick>();
-  for (const opp of opportunities.slice(0, 15)) {
-    const rec = recommendations.get(opp.symbol); if (!rec) continue;
-    const stability = calculateStability(opp.symbol);
-    const news = calculateNewsMomentum(opp.symbol, opp.sector);
+  for (const opp of opportunities) {
+    const rec = recommendations.get(opp.symbol);
+    if (!rec) continue; // need technical + option chain to score properly
     const price = liveQuotes[opp.symbol]?.ltp ?? 0;
     const changePct = liveQuotes[opp.symbol]?.changePct ?? 0;
 
-    // RE-EVALUATE DIRECTION: The opportunity engine picks direction based on
-    // engine votes (market/sector/RS/technical/option chain). But this can be
-    // WRONG when the actual price movement and news contradict the engine votes.
-    //
-    // The conviction engine overrides the direction when there's a clear
-    // contradiction:
-    //   - If price is UP >1% AND news is POSITIVE → force CE (don't show PE on a rising stock)
-    //   - If price is DOWN >1% AND news is NEGATIVE → force PE (don't show CE on a falling stock)
-    //   - Otherwise, keep the opportunity engine's direction
-    let direction = opp.direction;
-    if (changePct > 1 && news.direction === 'POSITIVE' && opp.direction === 'PE') {
-      direction = 'CE'; // Price rising + positive news = don't recommend PE
-    } else if (changePct < -1 && news.direction === 'NEGATIVE' && opp.direction === 'CE') {
-      direction = 'PE'; // Price falling + negative news = don't recommend CE
-    }
+    // Re-evaluate direction on clear price/news contradiction (kept from v2).
+    const news = calculateNewsMomentum(opp.symbol, opp.sector ?? '');
+    let direction: Direction = opp.direction;
+    if (changePct > 1 && news.direction === 'POSITIVE' && opp.direction === 'PE') direction = 'CE';
+    else if (changePct < -1 && news.direction === 'NEGATIVE' && opp.direction === 'CE') direction = 'PE';
 
-    const convictionScore = Math.round(opp.totalScore * 0.35 + (opp.optionChainScore ?? 50) * 0.20 + stability.score * 0.20 + (50 + news.boost * 2.5) * 0.15 + (50 + stability.trend * 2) * 0.10);
-    let confidence = Math.min(100, Math.max(0, (rec.decision?.confidence ?? 50) + news.boost));
+    const th = technicalHealth(direction, rec.technical);
+    const ocH = optionChainHealth(direction, rec.optionChain);
+    const fund = getFundamentalScore(opp.symbol, now);
+    const fundFit = fundamentalFit(direction, fund.total);
+    const room = roomToRun(direction, price, changePct, rec.technical, rec.optionChain);
+    const stability = calculateStability(opp.symbol);
+
+    // Composite conviction — room is a first-class driver (18%).
+    const conviction = Math.round(
+      0.30 * th +
+      0.22 * ocH +
+      0.10 * fundFit +
+      0.10 * clamp(50 + news.boost * 2.5) +
+      0.18 * room.score +
+      0.10 * stability.score,
+    );
+
+    // Record smoothed composite BEFORE building the pick (drives promote/demote).
+    recordScore(opp.symbol, conviction, topSymbols.has(opp.symbol));
+
+    const confidence = clamp((rec.decision?.confidence ?? 50) + news.boost);
     const zone = calculateEntryZone(price, direction);
     let entrySignal: EntrySignal = 'WAIT';
-    if (convictionScore >= 70 && stability.class !== 'VOLATILE' && news.direction !== 'NEGATIVE') entrySignal = 'ENTER_NOW';
-    else if (convictionScore < 55 || news.direction === 'NEGATIVE') entrySignal = 'AVOID';
-    if (news.direction === 'NEGATIVE' && news.boost <= -10) entrySignal = 'AVOID';
-    allPicksMap.set(opp.symbol, {
-      symbol: opp.symbol, sector: opp.sector, direction, rank: 0,
-      technicalScore: Math.round(opp.technicalScore ?? 0), optionChainScore: Math.round(opp.optionChainScore ?? 0),
-      convictionScore, originalScore: Math.round(opp.totalScore), confidence: Math.round(confidence),
-      stability: stability.class, stabilityScore: Math.round(stability.score), trendScore: Math.round(stability.trend), consecutiveTop10: stability.consecutiveTop10,
+    if (conviction >= 68 && room.score >= 50 && stability.class !== 'VOLATILE' && news.direction !== 'NEGATIVE') entrySignal = 'ENTER_NOW';
+    else if (conviction < 50 || room.score < 35 || (news.direction === 'NEGATIVE' && news.boost <= -10)) entrySignal = 'AVOID';
+
+    // primeScore — actionability of taking this RIGHT NOW.
+    const primeScore = Math.round(
+      0.26 * th + 0.20 * ocH + 0.16 * room.score + 0.14 * fundFit + 0.12 * confidence + 0.12 * stability.score,
+    );
+
+    const pick: ConvictionPick = {
+      symbol: opp.symbol, sector: opp.sector ?? '', direction, rank: 0,
+      technicalScore: Math.round(opp.technicalScore ?? 0),
+      optionChainScore: Math.round(ocH),
+      convictionScore: conviction,
+      originalScore: Math.round(opp.totalScore),
+      confidence: Math.round(confidence),
+      technicalHealth: Math.round(th),
+      roomScore: room.score, roomNotes: room.notes,
+      fundamentalScore: fund.total, fundamentalRating: fund.rating,
+      primeScore, isPrime: false, whyBest: '',
+      stability: stability.class, stabilityScore: Math.round(stability.score), trendScore: Math.round(stability.trend), consecutiveTop10: stability.consecutiveTop,
       newsMomentum: news.direction, newsBoost: news.boost, newsHeadlines: news.headlines, hasEarningsNews: news.hasEarnings,
       entrySignal, entryZoneLow: zone.low, entryZoneHigh: zone.high, currentPrice: price, stopLoss: zone.stopLoss, riskRewardRatio: zone.riskReward,
       locked: false, lockExpiresAt: null, lockMinutesLeft: 0, isNewsShock: false,
+    };
+    scored.set(opp.symbol, pick);
+    lastPick.set(opp.symbol, pick);
+  }
+
+  // ── Step 2: build per-side candidate pools (best→worst by EMA) ──
+  const ceCandidates = [...scored.values()].filter(p => p.direction === 'CE').sort((a, b) => emaOf(b.symbol) - emaOf(a.symbol)).slice(0, CANDIDATE_TOP_K).map(p => p.symbol);
+  const peCandidates = [...scored.values()].filter(p => p.direction === 'PE').sort((a, b) => emaOf(b.symbol) - emaOf(a.symbol)).slice(0, CANDIDATE_TOP_K).map(p => p.symbol);
+
+  processSide(ce, 'CE', ceCandidates, scored);
+  processSide(pe, 'PE', peCandidates, scored);
+
+  // ── Step 3: materialise the stable books (fall back to last snapshot) ──
+  const materialise = (order: string[]): ConvictionPick[] => {
+    const out: ConvictionPick[] = [];
+    order.forEach((sym, i) => {
+      const p = scored.get(sym) ?? lastPick.get(sym);
+      if (p) { const c = { ...p, rank: i + 1 }; out.push(c); }
     });
+    return out;
+  };
+  const cePicks = materialise(ce.set);
+  const pePicks = materialise(pe.set);
+
+  // ── Step 4: PRIME picks — best 1-2 to take now (gated on soundness + room) ──
+  const primeCandidates = [...cePicks, ...pePicks]
+    .filter(p => p.technicalHealth >= PRIME_MIN_TECH && p.roomScore >= PRIME_MIN_ROOM && p.convictionScore >= PRIME_MIN_CONVICTION && p.newsMomentum !== 'NEGATIVE')
+    .sort((a, b) => b.primeScore - a.primeScore);
+  const primePicks = primeCandidates.slice(0, 2);
+  for (const p of primePicks) {
+    p.isPrime = true;
+    p.whyBest = buildWhyBest(p);
+    // reflect prime flag back onto the book copies
+    const book = (p.direction === 'CE' ? cePicks : pePicks).find(x => x.symbol === p.symbol);
+    if (book) { book.isPrime = true; book.whyBest = p.whyBest; }
   }
 
-  // Step 3: Update conviction set with HYSTERESIS + DWELL TIME + MAX SIZE
-  const MAX_CONVICTION_SET_SIZE = 5; // only keep top 5 in the conviction set
-
-  // First: demote any symbols in the conviction set that are NOT in the current top 15
-  // (They dropped out of the opportunity list entirely — must be removed)
-  for (const symbol of Array.from(convictionSet)) {
-    if (!allPicksMap.has(symbol)) {
-      convictionSet.delete(symbol);
-      convictionOrder = convictionOrder.filter(s => s !== symbol);
-      convictionDwell.delete(symbol);
-    }
+  // ── Step 5: lock the single best prime pick (visual "conviction lock") ──
+  if (lockedSymbol && now < lockExpiresAt) {
+    const stillTop = primePicks.find(p => p.symbol === lockedSymbol);
+    if (stillTop && stillTop.convictionScore >= DEMOTE_SCORE && stillTop.newsMomentum !== 'NEGATIVE') {
+      stillTop.locked = true; stillTop.lockExpiresAt = lockExpiresAt; stillTop.lockMinutesLeft = Math.ceil((lockExpiresAt - now) / 60000);
+    } else { lockedSymbol = null; lockExpiresAt = 0; }
+  }
+  if ((!lockedSymbol || now >= lockExpiresAt) && primePicks[0] && primePicks[0].convictionScore >= 60) {
+    lockedSymbol = primePicks[0].symbol; lockExpiresAt = now + LOCK_DURATION_MS;
+    primePicks[0].locked = true; primePicks[0].lockExpiresAt = lockExpiresAt; primePicks[0].lockMinutesLeft = 5;
+    const book = (primePicks[0].direction === 'CE' ? cePicks : pePicks).find(x => x.symbol === lockedSymbol);
+    if (book) { book.locked = true; book.lockExpiresAt = lockExpiresAt; book.lockMinutesLeft = 5; }
   }
 
-  // Then: process all current picks for promotion/demotion
-  for (const [symbol, pick] of allPicksMap) {
-    const isInSet = convictionSet.has(symbol);
-    const consec = pick.consecutiveTop10;
-    const dwell = convictionDwell.get(symbol) ?? 0;
-
-    if (!isInSet && consec >= PROMOTION_THRESHOLD && pick.convictionScore >= PROMOTION_SCORE && convictionSet.size < MAX_CONVICTION_SET_SIZE) {
-      // Promote (only if set isn't full)
-      convictionSet.add(symbol);
-      convictionOrder.push(symbol);
-      convictionDwell.set(symbol, 1);
-    } else if (isInSet) {
-      // Increment dwell
-      convictionDwell.set(symbol, dwell + 1);
-      // Only demote if: score < DEMOTION_SCORE AND dwell >= MIN_DWELL_SCANS
-      if (pick.convictionScore < DEMOTION_SCORE && dwell >= MIN_DWELL_SCANS) {
-        convictionSet.delete(symbol);
-        convictionOrder = convictionOrder.filter(s => s !== symbol);
-        convictionDwell.delete(symbol);
-      }
-    }
-  }
-
-  // Step 4: Build convictionPicks using STABLE ORDER (convictionOrder, not re-sorted)
-  const convictionPicks: ConvictionPick[] = [];
-  for (const symbol of convictionOrder) {
-    const pick = allPicksMap.get(symbol);
-    if (pick) convictionPicks.push(pick);
-  }
-  // Only keep top 3
-  const top3 = convictionPicks.slice(0, 3);
-
-  // Step 5: Build watchlist with STABLE ORDER (NO re-sorting, NO removal on single-scan absence)
-  // ------------------------------------------------------------
-  // BUG FIX: The top 15 opportunities change every scan (scores fluctuate).
-  // Previously, watchlist symbols were removed the moment they dropped out of top 15.
-  // Now: symbols stay in watchlist for 8 scans (~40s) even if temporarily absent.
-  // ------------------------------------------------------------
-  const WATCHLIST_MIN_SCORE = 45;
-  const WATCHLIST_MAX = 7;
-  const WATCHLIST_ABSENCE_LIMIT = 8; // keep for 8 scans even if absent from top 15
-
-  // Track how many scans each watchlist symbol has been absent
-  if (!(globalThis as any)._wlAbsence) (globalThis as any)._wlAbsence = new Map<string, number>();
-  const wlAbsence = (globalThis as any)._wlAbsence as Map<string, number>;
-
-  // Build set of currently eligible symbols (in top 15 + score >= threshold)
+  // ── Step 6: watchlist — near-miss symbols not yet in either book ──
+  const inBook = new Set([...ce.set, ...pe.set]);
   const eligible = new Set<string>();
-  for (const [symbol, pick] of allPicksMap) {
-    if (!convictionSet.has(symbol) && pick.convictionScore >= WATCHLIST_MIN_SCORE) {
-      eligible.add(symbol);
-    }
+  for (const [sym, p] of scored) {
+    if (!inBook.has(sym) && p.convictionScore >= WATCHLIST_MIN_SCORE) eligible.add(sym);
   }
-
-  // Update absence counters
   for (const sym of watchlistOrder) {
-    if (eligible.has(sym) || convictionSet.has(sym)) {
-      wlAbsence.set(sym, 0);
-    } else {
-      wlAbsence.set(sym, (wlAbsence.get(sym) ?? 0) + 1);
-    }
+    if (eligible.has(sym) || inBook.has(sym)) watchlistAbsence.set(sym, 0);
+    else watchlistAbsence.set(sym, (watchlistAbsence.get(sym) ?? 0) + 1);
   }
-
-  // Only remove symbols that have been absent for WATCHLIST_ABSENCE_LIMIT scans
   watchlistOrder = watchlistOrder.filter(s => {
-    const absence = wlAbsence.get(s) ?? 0;
-    if (absence >= WATCHLIST_ABSENCE_LIMIT) {
-      wlAbsence.delete(s);
-      return false;
-    }
+    if (inBook.has(s)) return false;
+    if ((watchlistAbsence.get(s) ?? 0) >= WATCHLIST_ABSENCE_LIMIT) { watchlistAbsence.delete(s); return false; }
     return true;
   });
-
-  // Add newly-eligible symbols at the END (preserve insertion order)
-  for (const symbol of eligible) {
-    if (!watchlistOrder.includes(symbol) && !convictionSet.has(symbol)) {
-      watchlistOrder.push(symbol);
-      wlAbsence.set(symbol, 0);
-    }
+  for (const sym of eligible) {
+    if (!watchlistOrder.includes(sym)) { watchlistOrder.push(sym); watchlistAbsence.set(sym, 0); }
   }
-
-  // Build watchlist picks in stable order (NOT sorted by score)
   const watchlist: ConvictionPick[] = [];
-  for (const symbol of watchlistOrder) {
-    // Use current pick data if available, otherwise skip (symbol temporarily absent)
-    const pick = allPicksMap.get(symbol);
-    if (pick) watchlist.push(pick);
-  }
-
-  // Limit to max displayed
+  watchlistOrder.forEach((sym, i) => { const p = scored.get(sym); if (p) watchlist.push({ ...p, rank: i + 1 }); });
   const watchlistDisplayed = watchlist.slice(0, WATCHLIST_MAX);
 
-  // Step 6: Lock logic — lock ALL 3 picks, not just #1
-  // Check if lock is still valid
-  if (lockedSymbol && now < lockExpiresAt) {
-    // Check if locked symbol is still in top3
-    const locked = top3.find(p => p.symbol === lockedSymbol);
-    if (locked && locked.convictionScore >= DEMOTION_SCORE && locked.newsMomentum !== 'NEGATIVE') {
-      locked.locked = true;
-      locked.lockExpiresAt = lockExpiresAt;
-      locked.lockMinutesLeft = Math.ceil((lockExpiresAt - now) / 60000);
-      // Move locked symbol to rank 1
-      const idx = top3.indexOf(locked);
-      if (idx > 0) top3.unshift(top3.splice(idx, 1)[0]);
-    } else {
-      lockedSymbol = null;
-      lockExpiresAt = 0;
-    }
-  }
-
-  // Grant new lock if needed
-  if ((!lockedSymbol || now >= lockExpiresAt) && top3[0] && top3[0].convictionScore >= 60 && top3[0].stability !== 'VOLATILE') {
-    lockedSymbol = top3[0].symbol;
-    lockExpiresAt = now + LOCK_DURATION_MS;
-    top3[0].locked = true;
-    top3[0].lockExpiresAt = lockExpiresAt;
-    top3[0].lockMinutesLeft = 5;
-  }
-
-  // Assign ranks (STABLE — based on convictionOrder, not convictionScore)
-  top3.forEach((p, i) => p.rank = i + 1);
-  watchlist.forEach((p, i) => p.rank = i + 4);
-
-  // Step 7: News shocks
+  // ── Step 7: news shocks (unchanged) ──
   const shocks = detectNewsShocks(liveQuotes);
-  const newsShockPicks: ConvictionPick[] = shocks.map((s, idx) => {
-    const zone = calculateEntryZone(s.price, 'PE');
+  const newsShockPicks: ConvictionPick[] = shocks.map((sh, idx) => {
+    const zone = calculateEntryZone(sh.price, 'PE');
     return {
-      symbol: s.symbol, sector: s.sector, direction: 'PE' as const, rank: idx + 1,
-      technicalScore: 50, optionChainScore: 50, convictionScore: s.conviction, originalScore: 50, confidence: s.conviction,
+      symbol: sh.symbol, sector: sh.sector, direction: 'PE' as Direction, rank: idx + 1,
+      technicalScore: 50, optionChainScore: 50, convictionScore: sh.conviction, originalScore: 50, confidence: sh.conviction,
+      technicalHealth: 50, roomScore: 55, roomNotes: ['News-driven move'], fundamentalScore: 50, fundamentalRating: 'N/A',
+      primeScore: sh.conviction, isPrime: false, whyBest: '',
       stability: 'VOLATILE' as StabilityClass, stabilityScore: 30, trendScore: -10, consecutiveTop10: 99,
-      newsMomentum: 'NEGATIVE' as const, newsBoost: -10, newsHeadlines: [s.trigger], hasEarningsNews: false,
-      entrySignal: (s.ivCaution ? 'WAIT' : 'ENTER_NOW') as EntrySignal, entryZoneLow: zone.low, entryZoneHigh: zone.high,
-      currentPrice: s.price, stopLoss: zone.stopLoss, riskRewardRatio: zone.riskReward,
+      newsMomentum: 'NEGATIVE' as const, newsBoost: -10, newsHeadlines: [sh.trigger], hasEarningsNews: false,
+      entrySignal: (sh.ivCaution ? 'WAIT' : 'ENTER_NOW') as EntrySignal, entryZoneLow: zone.low, entryZoneHigh: zone.high,
+      currentPrice: sh.price, stopLoss: zone.stopLoss, riskRewardRatio: zone.riskReward,
       locked: false, lockExpiresAt: null, lockMinutesLeft: 0, isNewsShock: true,
-      shockTrigger: s.trigger, shockAgeMinutes: s.age, shockSector: s.sector, ivCaution: s.ivCaution, ivCautionReason: s.ivReason, shockTargetPrice: s.target,
+      shockTrigger: sh.trigger, shockAgeMinutes: sh.age, shockSector: sh.sector, ivCaution: sh.ivCaution, ivCautionReason: sh.ivReason, shockTargetPrice: sh.target,
     };
   });
 
-  // Save state to disk
+  // Legacy convictionPicks = prime first, then the rest of both books (deduped).
+  const legacySeen = new Set<string>();
+  const convictionPicks: ConvictionPick[] = [];
+  for (const p of [...primePicks, ...cePicks, ...pePicks]) {
+    if (!legacySeen.has(p.symbol)) { legacySeen.add(p.symbol); convictionPicks.push(p); }
+  }
+
   saveState();
 
-  return { convictionPicks: top3, watchlist: watchlistDisplayed, lockedPick: top3.find(p => p.locked) ?? null, newsShockPicks, updatedAt: now };
+  return {
+    convictionPicks: convictionPicks.slice(0, 6),
+    cePicks, pePicks, primePicks,
+    watchlist: watchlistDisplayed,
+    lockedPick: primePicks.find(p => p.locked) ?? null,
+    newsShockPicks,
+    updatedAt: now,
+  };
+}
+
+function buildWhyBest(p: ConvictionPick): string {
+  const bits: string[] = [];
+  bits.push(`${p.direction === 'CE' ? 'Bullish' : 'Bearish'} setup`);
+  bits.push(`tech ${p.technicalHealth}`);
+  bits.push(`room ${p.roomScore}`);
+  if (p.fundamentalRating && p.fundamentalRating !== 'N/A') bits.push(`fundamentals ${p.fundamentalRating.toLowerCase()}`);
+  if (p.optionChainScore >= 60) bits.push('option-chain confirms');
+  const lead = p.roomNotes?.[0];
+  return `${bits.join(', ')}${lead ? ` — ${lead}` : ''}`;
 }
 
 export function resetConvictionEngine(): void {
-  scoreHistory.clear();
-  lockedSymbol = null;
-  lockExpiresAt = 0;
-  convictionSet.clear();
-  convictionOrder = [];
-  convictionDwell.clear();
-  watchlistOrder = [];
+  scoreHistory.clear(); ema.clear();
+  ce = emptySide(); pe = emptySide();
+  fundamentals = { day: '', scores: {} };
+  lockedSymbol = null; lockExpiresAt = 0;
+  watchlistOrder = []; watchlistAbsence.clear();
+  lastPick.clear();
   saveState();
 }

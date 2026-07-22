@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getFundamentalProvider } from '@/lib/odss/fundamentals/provider';
 import { analyzeFundamentals, getBuySellHold } from '@/lib/odss/fundamentals/analyzer';
 import { readFileSync } from 'fs';
+import { dataPath } from '@/lib/odss/data-dir';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,7 +39,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ sym
   let priceChangePct = 0;
   let priceError: string | undefined;
   try {
-    const raw = readFileSync('/home/z/odss-data/quotes.json', 'utf-8');
+    const raw = readFileSync(dataPath('quotes.json'), 'utf-8');
     const allData = JSON.parse(raw);
     const q = (allData.quotes ?? []).find((x: any) => x.symbol === sym);
     if (q && q.ltp > 0) {
