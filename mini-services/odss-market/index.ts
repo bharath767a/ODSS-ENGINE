@@ -25,7 +25,9 @@ import { getDataRouter } from '../../src/lib/odss/data-providers/router';
 import { ALL_SYMBOLS } from '../../src/lib/odss/universe';
 import { fetchRealNews } from '../../src/lib/odss/news/news-fetcher';
 import { archiveNews } from '../../src/lib/odss/news/archive';
-import { archiveLiveQuotes, archiveHistoricalCandles } from '../../src/lib/odss/archive/data-archive';
+import { archiveLiveQuotes, archiveHistoricalCandles, archiveOptionChain } from '../../src/lib/odss/archive/data-archive';
+import { fetchAndInjectOptionChains } from '../../src/lib/odss/data-providers/option-chain-feed';
+import { updateOCConfluence, getAllOCConfluence, getOCConfluence } from '../../src/lib/odss/engines/oc-confluence';
 import { getMarketSession, shouldEngineBeActive, shouldPollRealData } from '../../src/lib/odss/market-session';
 import { dataPath, ensureDataDir } from '../../src/lib/odss/data-dir';
 import type { Direction } from '../../src/lib/odss/types';
@@ -199,7 +201,81 @@ async function fetchAndInjectRealData() {
 setInterval(fetchAndInjectRealData, REAL_DATA_INTERVAL_MS);
 // Fetch immediately on startup (after a 2s delay to let the simulator warm up)
 setTimeout(fetchAndInjectRealData, 2000);
-console.log('[odss-market] Real data injection loop started (Yahoo Finance, 10s interval)');
+console.log('[odss-market] Real data injection loop started (bridge/Dhan → Yahoo, 5s interval)');
+
+// ============================================================
+// REAL OPTION-CHAIN FEED + DELTA/OI CONFLUENCE
+// ============================================================
+// Fetches REAL Dhan option chains (via the bridge) for the current CE/PE picks,
+// indices and any active trade, injects them into the simulator (so the option
+// chain engine analyses real OI/greeks), then runs the multi-timeframe
+// (5m/15m/4h) delta+OI confluence engine for entry/exit timing.
+const OC_INTERVAL_MS = 8_000;
+const OC_INDEX_SYMBOLS = ['NIFTY', 'BANKNIFTY'];
+let ocInProgress = false;
+
+async function fetchOptionChainsAndConfluence() {
+  if (ocInProgress) return;
+  // Option chains are only meaningful during market hours.
+  if (!shouldPollRealData()) return;
+  ocInProgress = true;
+  try {
+    const router = getDataRouter();
+    const bridge: any = router.getProvider('BRIDGE' as any);
+    if (!bridge || !bridge.isConfigured() || typeof bridge.getRawOptionChain !== 'function') return;
+
+    const store = getStore();
+    const conv: any = store.conviction;
+    const dirBySym = new Map<string, Direction>();
+    for (const p of (conv?.cePicks ?? [])) dirBySym.set(p.symbol, 'CE');
+    for (const p of (conv?.pePicks ?? [])) dirBySym.set(p.symbol, 'PE');
+    const active: any = store.activeTrade;
+    if (active?.symbol) dirBySym.set(active.symbol, active.direction);
+    for (const idx of OC_INDEX_SYMBOLS) if (!dirBySym.has(idx)) dirBySym.set(idx, 'CE');
+
+    const symbols = Array.from(dirBySym.keys()).slice(0, 12); // cap for Dhan rate limits
+    const chains = await fetchAndInjectOptionChains(bridge, symbols);
+    for (const [sym, chain] of chains) {
+      try { updateOCConfluence(sym, chain, dirBySym.get(sym) ?? 'CE'); } catch {}
+      try { archiveOptionChain(sym, chain); } catch {}
+    }
+    (store as any).ocConfluence = getAllOCConfluence();
+    if (chains.size > 0) console.log(`[odss-market] Option chains: ${chains.size} real Dhan chains injected + confluence updated`);
+  } catch (e) {
+    console.warn('[odss-market] Option-chain feed error:', (e as Error).message);
+  } finally {
+    ocInProgress = false;
+  }
+}
+setInterval(fetchOptionChainsAndConfluence, OC_INTERVAL_MS);
+setTimeout(fetchOptionChainsAndConfluence, 6000);
+console.log('[odss-market] Option-chain + delta/OI confluence loop started (8s interval)');
+
+// Blend option-chain/delta confluence into picks + active trade for entry/exit timing.
+function enrichWithOCConfluence(store: any): void {
+  try {
+    const conv = store.conviction;
+    const enrich = (picks: any[]) => {
+      if (!Array.isArray(picks)) return;
+      for (const p of picks) {
+        const oc = getOCConfluence(p.symbol);
+        if (!oc) continue;
+        p.ocScore = oc.ocScore; p.ocEntrySignal = oc.entrySignal; p.ocExitSignal = oc.exitSignal;
+        p.oiAction = oc.oiAction; p.ocNotes = oc.notes; p.atmDelta = oc.atmDelta;
+        // OC can veto a technical ENTER, or promote a WAIT when it strongly
+        // confirms and there is still room (and no negative news).
+        if (p.entrySignal === 'ENTER_NOW' && oc.entrySignal === 'AVOID') p.entrySignal = 'WAIT';
+        else if (p.entrySignal === 'WAIT' && oc.entrySignal === 'ENTER' && (p.roomScore ?? 0) >= 50 && p.newsMomentum !== 'NEGATIVE') p.entrySignal = 'ENTER_NOW';
+      }
+    };
+    if (conv) { enrich(conv.cePicks); enrich(conv.pePicks); enrich(conv.primePicks); enrich(conv.convictionPicks); enrich(conv.watchlist); }
+    const active = store.activeTrade;
+    if (active?.symbol) {
+      const oc = getOCConfluence(active.symbol);
+      if (oc) { active.ocExitSignal = oc.exitSignal; active.ocScore = oc.ocScore; active.oiAction = oc.oiAction; active.ocNotes = oc.notes; }
+    }
+  } catch { /* non-critical */ }
+}
 
 // ============================================================
 // Background News Archiving — fetches real news every 5 minutes
@@ -319,6 +395,14 @@ setInterval(async () => {
     }
     const store = getStore();
 
+    // ─── OPTION-CHAIN CONFLUENCE ENRICHMENT ───
+    // Blend the real delta/OI confluence (entry/exit timing) into the conviction
+    // picks so "enter on time / exit on time" reflects the option chain + delta
+    // ON TOP OF the technical setup. Only fires when real chains are flowing.
+    enrichWithOCConfluence(store);
+
+    const ocConfluence = (store as any).ocConfluence || {};
+
     // Write full state to shared file so the web server's API routes can read it
     try {
       const stateData = {
@@ -332,6 +416,7 @@ setInterval(async () => {
         topRecommendations: Array.from(store.recommendations.values()).slice(0, 10),
         smartMoney: (store as any).smartMoney || null,
         squeezes: (store as any).squeezes || [],
+        ocConfluence,
         decisionLog: store.decisionLog.slice(0, 50),
         completedTrades: store.completedTrades.slice(0, 20),
         lastScanAt: store.lastScanAt,
@@ -350,6 +435,7 @@ setInterval(async () => {
       topRecommendations: Array.from(store.recommendations.values()).slice(0, 10),
         smartMoney: (store as any).smartMoney || null,
         squeezes: (store as any).squeezes || [],
+        ocConfluence,
       decisionLog: store.decisionLog.slice(0, 20),
       recording: isRecording(),
     });

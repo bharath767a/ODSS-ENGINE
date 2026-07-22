@@ -311,6 +311,29 @@ export function injectRealQuote(
   }
 }
 
+// ---- REAL option chains (injected from the Dhan bridge) ----
+// When a fresh real chain exists for a symbol, getOptionChain() returns it
+// instead of the synthetic one, so every downstream engine analyses REAL
+// OI / greeks / IV. Falls back to synthetic when stale/absent.
+const realOptionChains = new Map<string, { chain: OptionChain; ts: number }>();
+const REAL_OC_TTL_MS = 120_000; // real chain considered fresh for 2 min
+
+/**
+ * Inject a REAL option chain (already mapped to the engine's OptionChain shape,
+ * with per-strike OI change computed by the feed) so the option-chain engine,
+ * conviction engine and confluence engine all run on real Dhan data.
+ */
+export function injectRealOptionChain(symbol: string, chain: OptionChain): void {
+  if (!chain || !Array.isArray(chain.strikes) || chain.strikes.length === 0) return;
+  realOptionChains.set(symbol, { chain, ts: Date.now() });
+}
+
+/** Is a fresh real option chain available for this symbol? */
+export function hasRealOptionChain(symbol: string): boolean {
+  const e = realOptionChains.get(symbol);
+  return !!e && Date.now() - e.ts < REAL_OC_TTL_MS;
+}
+
 /**
  * Inject real India VIX into the simulator.
  */
@@ -348,6 +371,10 @@ export function getCurrentExpiry(): string {
 
 // ---- Option chain generation ----
 export function getOptionChain(symbol: string, numStrikes = 11): OptionChain | null {
+  // Prefer a fresh REAL chain from the Dhan bridge when available.
+  const real = realOptionChains.get(symbol);
+  if (real && Date.now() - real.ts < REAL_OC_TTL_MS) return real.chain;
+
   const s = getSimulator();
   const sym = s.symbols.get(symbol);
   if (!sym) return null;

@@ -304,6 +304,22 @@ export class BridgeProvider implements Provider {
     return optionChain;
   }
 
+  /**
+   * Fetch the RAW Dhan option-chain JSON from the bridge (unmapped).
+   * Shape: { symbol, spot, atmStrike, pcr, maxPainStrike, totalCallOI,
+   *          totalPutOI, expiry, strikes: [{ strike, callLTP, callOI, callIV,
+   *          callDelta, callGamma, callTheta, callVega, callVolume, putLTP,
+   *          putOI, ... }], source }.
+   * Returns null when Dhan is unavailable/token stale (bridge returns an error).
+   */
+  async getRawOptionChain(symbol: string): Promise<any | null> {
+    if (!rateLimiter.canCall(BRIDGE_NAME)) return null;
+    rateLimiter.recordCall(BRIDGE_NAME);
+    const data = await this.callBridge(`/options/${encodeURIComponent(symbol)}`);
+    if (!data || data.error || !Array.isArray(data.strikes) || data.strikes.length === 0) return null;
+    return data;
+  }
+
   async getIndiaVIX(): Promise<number> {
     // Bridge doesn't have a dedicated VIX endpoint — fetch NIFTY quote
     const data = await this.callBridge('/indices');

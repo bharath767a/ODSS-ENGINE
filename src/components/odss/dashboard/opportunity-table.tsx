@@ -347,6 +347,9 @@ function SimplePickCard({ pick, idx, q, rec, isTaken, onSelect, pickConfluence }
         {pick.roomScore !== undefined && (
           <span className={cn('rounded px-1 py-0.5 font-mono text-[8px] font-bold', pick.roomScore >= 60 ? 'bg-bull/15 text-bull' : pick.roomScore >= 45 ? 'bg-warn/15 text-warn' : 'bg-bear/15 text-bear')} title={pick.roomNotes?.join(' · ')}>ROOM {pick.roomScore}</span>
         )}
+        {pick.ocScore !== undefined && (
+          <span className={cn('rounded px-1 py-0.5 font-mono text-[8px] font-bold', pick.ocScore >= 60 ? 'bg-bull/15 text-bull' : pick.ocScore >= 45 ? 'bg-warn/15 text-warn' : 'bg-bear/15 text-bear')} title={[`OI: ${pick.oiAction}`, `entry: ${pick.ocEntrySignal}`, `exit: ${pick.ocExitSignal}`, ...(pick.ocNotes ?? [])].join(' · ')}>OC {pick.ocScore}</span>
+        )}
         <span className={cn('flex items-center gap-1 rounded px-2 py-1 font-mono text-[10px] font-bold tracking-widest', signalConfig.bg)}>
           {signalConfig.icon}{signalConfig.label}
         </span>
