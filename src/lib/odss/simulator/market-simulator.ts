@@ -82,6 +82,18 @@ const SECONDS_PER_TICK = 60; // 1-minute candles
 const TICKS_PER_DAY = 375; // 9:15 to 15:30 = 6h15m = 375 min
 const RISK_FREE_RATE = 0.07;
 
+// ============================================================
+// REAL-DATA-ONLY POLICY (strict)
+// ============================================================
+// When true (default), the engine NEVER serves synthetic data:
+//   - getQuote()      returns null for any symbol not backed by a real injection
+//   - getOptionChain() returns null unless a fresh REAL Dhan chain was injected
+//   - getIndiaVix()   returns 0 until a real VIX is injected
+//   - tick()          only advances candles for real-backed symbols
+// Set ODSS_REAL_DATA_ONLY=false ONLY for offline development with synthetic data.
+const REAL_DATA_ONLY = process.env.ODSS_REAL_DATA_ONLY !== 'false';
+let realVixActive = false;
+
 function pickRegime(rng: () => number): Regime {
   const r = rng();
   if (r < 0.3) return 'TRENDING_UP';
@@ -201,6 +213,10 @@ export function tick(): number {
   // until the first real quote arrives.
 
   for (const sym of s.symbols.values()) {
+    // Strict real-data-only: never fabricate candles for symbols that have no
+    // real injection yet (otherwise indicators would compute on a synthetic
+    // base price). Only hold/continue candles for real-backed symbols.
+    if (REAL_DATA_ONLY && !sym.realDataActive) continue;
     // Hold the last known real price — add a flat candle for indicator continuity
     sym.candles.push({
       timestamp: now,
@@ -221,6 +237,8 @@ export function getQuote(symbol: string): Quote | null {
   const s = getSimulator();
   const sym = s.symbols.get(symbol);
   if (!sym) return null;
+  // Strict real-data-only: no real injection → no quote (never serve basePrice).
+  if (REAL_DATA_ONLY && !sym.realDataActive) return null;
   const closes = sym.candles.map((c) => c.close);
   // VWAP across the day
   let pv = 0;
@@ -255,6 +273,8 @@ export function getAllQuotes(): Quote[] {
 }
 
 export function getIndiaVix(): number {
+  // Strict real-data-only: 0 (unavailable) until a real VIX is injected.
+  if (REAL_DATA_ONLY && !realVixActive) return 0;
   return getSimulator().indiaVix;
 }
 
@@ -307,6 +327,7 @@ export function injectRealQuote(
   // Overwrite VIX if provided
   if (realVix !== undefined && realVix > 0 && realVix < 200) {
     s.indiaVix = realVix;
+    realVixActive = true;
     (s as any)._lastRealVixUpdate = Date.now();
   }
 }
@@ -341,6 +362,7 @@ export function injectRealVix(realVix: number): void {
   const s = getSimulator();
   if (realVix > 0 && realVix < 200) {
     s.indiaVix = realVix;
+    realVixActive = true;
     (s as any)._lastRealVixUpdate = Date.now();
   }
 }
@@ -354,6 +376,8 @@ export function getMarketBreadth(): MarketBreadth {
   let adv = 0;
   let dec = 0;
   for (const sym of s.symbols.values()) {
+    // Strict real-data-only: only count symbols with a real quote.
+    if (REAL_DATA_ONLY && !sym.realDataActive) continue;
     if (sym.price > sym.prevClose) adv++;
     else if (sym.price < sym.prevClose) dec++;
   }
@@ -374,6 +398,9 @@ export function getOptionChain(symbol: string, numStrikes = 11): OptionChain | n
   // Prefer a fresh REAL chain from the Dhan bridge when available.
   const real = realOptionChains.get(symbol);
   if (real && Date.now() - real.ts < REAL_OC_TTL_MS) return real.chain;
+
+  // Strict real-data-only: no real chain → no chain (never fabricate greeks/OI).
+  if (REAL_DATA_ONLY) return null;
 
   const s = getSimulator();
   const sym = s.symbols.get(symbol);

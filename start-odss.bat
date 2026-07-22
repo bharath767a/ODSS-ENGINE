@@ -12,6 +12,8 @@ REM --- code update / reset never wipes it. Change ODSS_DATA_DIR to move it. ---
 set "ODSS_DATA_DIR=%USERPROFILE%\.odss-data"
 set "DATABASE_URL=file:%ODSS_DATA_DIR%\custom.db"
 set "NODE_OPTIONS=--max-old-space-size=1024"
+REM Strict real-data-only: never serve synthetic quotes/chains/greeks/VIX.
+set "ODSS_REAL_DATA_ONLY=true"
 REM --- Make sure bun (installed to %USERPROFILE%\.bun) is on PATH ---
 set "PATH=%USERPROFILE%\.bun\bin;%PATH%"
 set "REPO=%~dp0"
