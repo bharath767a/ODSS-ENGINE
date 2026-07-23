@@ -29,6 +29,7 @@ import { archiveLiveQuotes, archiveHistoricalCandles, archiveOptionChain } from 
 import { fetchAndInjectOptionChains } from '../../src/lib/odss/data-providers/option-chain-feed';
 import { updateOCConfluence, getAllOCConfluence, getOCConfluence } from '../../src/lib/odss/engines/oc-confluence';
 import { listTaken, assignStrike, type TakenTrade } from '../../src/lib/odss/taken-trades';
+import { runControlEngine } from '../../src/lib/odss/engines/oc-control';
 import { recordNewsShocks } from '../../src/lib/odss/news/shocks-store';
 import { getMarketSession, shouldEngineBeActive, shouldPollRealData } from '../../src/lib/odss/market-session';
 import { dataPath, ensureDataDir } from '../../src/lib/odss/data-dir';
@@ -245,6 +246,13 @@ async function fetchOptionChainsAndConfluence() {
       try { archiveOptionChain(sym, chain); } catch {}
     }
     (store as any).ocConfluence = getAllOCConfluence();
+    // Index control read (direction-agnostic) for the NIFTY/BANKNIFTY benchmark cards.
+    const idxControl: Record<string, any> = {};
+    for (const idx of OC_INDEX_SYMBOLS) {
+      const chain = chains.get(idx);
+      if (chain) { try { idxControl[idx] = runControlEngine(chain, getQuote(idx)?.changePct ?? 0); } catch {} }
+    }
+    (store as any).indexControl = idxControl;
     if (chains.size > 0) console.log(`[odss-market] Option chains: ${chains.size} real Dhan chains injected + confluence updated`);
   } catch (e) {
     console.warn('[odss-market] Option-chain feed error:', (e as Error).message);
@@ -467,6 +475,7 @@ setInterval(async () => {
     try { recordNewsShocks((store.conviction as any)?.newsShockPicks); } catch {}
 
     const ocConfluence = (store as any).ocConfluence || {};
+    const indexControl = (store as any).indexControl || {};
 
     // Write full state to shared file so the web server's API routes can read it
     try {
@@ -482,6 +491,7 @@ setInterval(async () => {
         smartMoney: (store as any).smartMoney || null,
         squeezes: (store as any).squeezes || [],
         ocConfluence,
+        indexControl,
         decisionLog: store.decisionLog.slice(0, 50),
         completedTrades: store.completedTrades.slice(0, 20),
         lastScanAt: store.lastScanAt,
@@ -501,6 +511,7 @@ setInterval(async () => {
         smartMoney: (store as any).smartMoney || null,
         squeezes: (store as any).squeezes || [],
         ocConfluence,
+        indexControl,
       decisionLog: store.decisionLog.slice(0, 20),
       recording: isRecording(),
     });

@@ -73,7 +73,7 @@ export interface ConvictionPick {
   // ── stability / news ──
   stability: StabilityClass; stabilityScore: number; trendScore: number; consecutiveTop10: number;
   newsMomentum: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL'; newsBoost: number; newsHeadlines: string[]; hasEarningsNews: boolean;
-  entrySignal: EntrySignal; entryZoneLow: number; entryZoneHigh: number; currentPrice: number; stopLoss: number; riskRewardRatio: number;
+  entrySignal: EntrySignal; entrySignalReason?: string; entryZoneLow: number; entryZoneHigh: number; currentPrice: number; stopLoss: number; riskRewardRatio: number;
   locked: boolean; lockExpiresAt: number | null; lockMinutesLeft: number;
   isNewsShock: boolean; shockTrigger?: string; shockAgeMinutes?: number; shockSector?: string;
   ivCaution?: boolean; ivCautionReason?: string; shockTargetPrice?: number;
@@ -566,15 +566,17 @@ export function runConvictionEngine(
     const controlContradicts = !!control && controlFit < 40;
     const trapAgainst = !!control?.trap && controlContradicts;
 
-    // Composite conviction — technical + REAL order-flow control + room lead.
+    // Composite conviction — ROOM-TO-TARGET is now a top driver (22%) so the
+    // stocks that surface are the ones with the move still ahead of them, not
+    // the ones that already ran. Technical + real order-flow control follow.
     const conviction = Math.round(
-      0.26 * th +
-      0.16 * ocH +
+      0.24 * th +
+      0.14 * ocH +
       0.16 * controlFit +
-      0.08 * fundFit +
-      0.08 * clamp(50 + news.boost * 2.5) +
-      0.16 * room.score +
-      0.10 * stability.score,
+      0.06 * fundFit +
+      0.06 * clamp(50 + news.boost * 2.5) +
+      0.22 * room.score +
+      0.12 * stability.score,
     );
 
     // Record smoothed composite BEFORE building the pick (drives promote/demote).
@@ -582,10 +584,27 @@ export function runConvictionEngine(
 
     const confidence = clamp((rec.decision?.confidence ?? 50) + news.boost);
     const zone = calculateEntryZone(price, direction);
+    // Direction (who's in control) and TIMING (is there room now) are different
+    // questions. AVOID means the flow is on the WRONG side / setup is broken.
+    // A strong pick that has simply run too far is WAIT (buy the pullback), not
+    // AVOID — otherwise "BUYERS 84%" next to "AVOID" reads as a contradiction.
     let entrySignal: EntrySignal = 'WAIT';
-    // Order flow must not be against us to greenlight an entry.
-    if (conviction >= 68 && room.score >= 50 && controlFit >= 50 && stability.class !== 'VOLATILE' && news.direction !== 'NEGATIVE') entrySignal = 'ENTER_NOW';
-    else if (conviction < 50 || room.score < 35 || controlContradicts || (news.direction === 'NEGATIVE' && news.boost <= -10)) entrySignal = 'AVOID';
+    let entrySignalReason = '';
+    const flowAgainst = controlContradicts || (news.direction === 'NEGATIVE' && news.boost <= -10);
+    if (flowAgainst) {
+      entrySignal = 'AVOID';
+      entrySignalReason = trapAgainst ? 'trap — order flow against the price move'
+        : control && controlFit < 40 ? `order flow ${direction === 'CE' ? 'bearish (sellers in control)' : 'bullish (buyers in control)'} — wrong side`
+        : 'negative news flow';
+    } else if (conviction < 45) {
+      entrySignal = 'AVOID'; entrySignalReason = 'setup too weak';
+    } else if (conviction >= 68 && room.score >= 50 && controlFit >= 50 && stability.class !== 'VOLATILE') {
+      entrySignal = 'ENTER_NOW'; entrySignalReason = 'flow + room aligned — move still ahead';
+    } else if (room.score < 40) {
+      entrySignal = 'WAIT'; entrySignalReason = `extended (room ${room.score}) — wait for a pullback${(rec.technical?.vwap ?? 0) > 0 ? ` toward ${Math.round(rec.technical.vwap)}` : ''}`;
+    } else {
+      entrySignal = 'WAIT'; entrySignalReason = 'building — wait for confirmation';
+    }
 
     // primeScore — actionability of taking this RIGHT NOW (control-aware).
     const primeScore = Math.round(
@@ -608,7 +627,7 @@ export function runConvictionEngine(
       primeScore, isPrime: false, whyBest: '',
       stability: stability.class, stabilityScore: Math.round(stability.score), trendScore: Math.round(stability.trend), consecutiveTop10: stability.consecutiveTop,
       newsMomentum: news.direction, newsBoost: news.boost, newsHeadlines: news.headlines, hasEarningsNews: news.hasEarnings,
-      entrySignal, entryZoneLow: zone.low, entryZoneHigh: zone.high, currentPrice: price, stopLoss: zone.stopLoss, riskRewardRatio: zone.riskReward,
+      entrySignal, entrySignalReason, entryZoneLow: zone.low, entryZoneHigh: zone.high, currentPrice: price, stopLoss: zone.stopLoss, riskRewardRatio: zone.riskReward,
       locked: false, lockExpiresAt: null, lockMinutesLeft: 0, isNewsShock: false,
     };
     scored.set(opp.symbol, pick);

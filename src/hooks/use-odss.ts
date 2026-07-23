@@ -31,6 +31,7 @@ export interface ODSSState {
   // Taken positions (tracked with real greeks) + option-chain confluence
   takenTrades: any[];
   ocConfluence: Record<string, any>;
+  indexControl: Record<string, any>;
   confluence: any[] | null;
   connected: boolean;
   lastUpdate: number;
@@ -64,6 +65,7 @@ const initialState: ODSSState = {
   optionChain: null,
   takenTrades: [],
   ocConfluence: {},
+  indexControl: {},
   confluence: null,
   connected: false,
   lastUpdate: 0,
@@ -128,6 +130,7 @@ function connect() {
       activeTrade: data.activeTrade !== undefined ? data.activeTrade : currentState.activeTrade,
       topRecommendations: data.topRecommendations ?? currentState.topRecommendations,
       ocConfluence: data.ocConfluence ?? currentState.ocConfluence,
+      indexControl: data.indexControl ?? currentState.indexControl,
       decisionLog: data.decisionLog ?? currentState.decisionLog,
       lastUpdate: Date.now(),
     };

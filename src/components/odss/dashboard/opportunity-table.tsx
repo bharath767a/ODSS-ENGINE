@@ -12,7 +12,8 @@ import { cn } from '@/lib/utils';
 import type { Recommendation } from '@/lib/odss/types';
 
 function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) => void }) {
-  const { topRecommendations, liveQuotes, conviction, takenTrades, confluence, nifty } = useODSS();
+  const { topRecommendations, liveQuotes, conviction, takenTrades, confluence, indexControl, nifty } = useODSS();
+  const niftyControl = indexControl?.['NIFTY'] ?? null;
   const recs = topRecommendations;
   const convictionPicks = conviction?.convictionPicks ?? [];
   const watchlist = conviction?.watchlist ?? [];
@@ -115,17 +116,43 @@ function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) 
           </CardTitle>
         </CardHeader>
         <CardContent className="p-3">
-          <div className="mb-2 flex items-center gap-2">
-            <DirectionBadge direction={niftyConfluence?.direction ?? (niftyQuote && niftyQuote.changePct < -0.5 ? 'PE' : 'CE')} />
-            <span className="font-mono text-[10px] text-muted-foreground">
-              {(niftyConfluence?.direction ?? (niftyQuote && niftyQuote.changePct < -0.5 ? 'PE' : 'CE')) === 'CE' ? 'Bullish bias (buy calls on dips)' : 'Bearish bias (buy puts on rallies)'}
-            </span>
-          </div>
-          {niftyConfluence ? (
-            <ConfluenceCard confluence={niftyConfluence} />
+          {(() => {
+            const biasDir = niftyControl ? (niftyControl.bias === 'SHORT' ? 'PE' : 'CE') : (niftyQuote && niftyQuote.changePct < -0.5 ? 'PE' : 'CE');
+            return (
+              <div className="mb-2 flex items-center gap-2">
+                <DirectionBadge direction={biasDir} />
+                <span className="font-mono text-[10px] text-muted-foreground">
+                  {biasDir === 'CE' ? 'Bullish bias (buy calls on dips)' : 'Bearish bias (buy puts on rallies)'}
+                </span>
+              </div>
+            );
+          })()}
+          {niftyControl ? (
+            <div className="space-y-1.5 rounded-md border border-border/40 bg-card/30 p-2">
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1 font-mono text-[9px] uppercase tracking-widest text-muted-foreground"><Users className="h-3 w-3" /> Who's in control</span>
+                <span className={cn('rounded px-1.5 py-0.5 font-mono text-[10px] font-bold',
+                  niftyControl.controller === 'BUYERS' ? 'bg-bull/20 text-bull' : niftyControl.controller === 'SELLERS' ? 'bg-bear/20 text-bear' : 'bg-muted/30 text-muted-foreground')}>
+                  {niftyControl.controller} {niftyControl.strength}%
+                </span>
+              </div>
+              {niftyControl.evidence?.[0] && <div className="font-mono text-[9px] leading-snug text-foreground/80">{niftyControl.evidence[0]}</div>}
+              <div className="flex flex-wrap gap-1 font-mono text-[9px] text-muted-foreground">
+                <span className="rounded bg-bull/10 px-1 py-0.5 text-bull">Sup {niftyControl.supportStrike}</span>
+                <span className="rounded bg-bear/10 px-1 py-0.5 text-bear">Res {niftyControl.resistanceStrike}</span>
+                <span className="rounded bg-muted/20 px-1 py-0.5">Max pain {niftyControl.maxPain}</span>
+                <span className="rounded bg-muted/20 px-1 py-0.5">PCR {Number(niftyControl.pcr).toFixed(2)}</span>
+                <span className="rounded bg-muted/20 px-1 py-0.5">{String(niftyControl.gammaRegime).toLowerCase()}</span>
+              </div>
+              {niftyControl.trap && (
+                <div className="flex items-start gap-1 rounded border border-amber-400/30 bg-amber-400/10 px-1.5 py-1 font-mono text-[9px] text-amber-600">
+                  <AlertTriangle className="mt-0.5 h-2.5 w-2.5 shrink-0" />{niftyControl.trapNote}
+                </div>
+              )}
+            </div>
           ) : (
             <div className="rounded-md border border-muted/30 bg-muted/5 p-2 text-center font-mono text-[9px] text-muted-foreground">
-              Confluence computing — awaiting market data (CVD 5m + Options 15m + VWAP 1h)
+              NIFTY order-flow read loading — fetching option chain from Dhan…
             </div>
           )}
         </CardContent>
@@ -385,6 +412,12 @@ function SimplePickCard({ pick, idx, q, rec, isTaken, onSelect, pickConfluence }
       {/* Intraday Confluence Card */}
       {pickConfluence && (
         <ConfluenceCard confluence={pickConfluence} />
+      )}
+      {/* Entry-timing reason (why ENTER / WAIT / AVOID) */}
+      {pick.entrySignalReason && (
+        <div className="mt-1 font-mono text-[9px] italic leading-snug text-muted-foreground">
+          {pick.entrySignal === 'ENTER_NOW' ? '✓' : pick.entrySignal === 'AVOID' ? '✕' : '⏳'} {pick.entrySignalReason}
+        </div>
       )}
       {/* WHO'S IN CONTROL — real order-flow read */}
       {pick.controller && (
