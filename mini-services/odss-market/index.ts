@@ -159,27 +159,27 @@ async function fetchAndInjectRealData() {
   lastRealDataFetch = Date.now();
   try {
     const router = getDataRouter();
-    const bridge = router.getProvider('BRIDGE' as any);
+    const angel = router.getProvider('ANGEL_ONE');
     const yahoo = router.getProvider('YAHOO');
 
-    // VIX always from Yahoo — the bridge has no dedicated VIX feed.
+    // VIX always from Yahoo — reliable and free.
     try { const vix = await yahoo?.getIndiaVIX(); if (vix && vix > 0 && vix < 200) injectRealVix(vix); }
     catch (e) { console.warn('[odss-market] VIX fetch failed:', (e as Error).message); }
 
-    // PRIMARY: bridge → Dhan real quotes (one batched call for all symbols,
-    // with Yahoo fallback handled inside the bridge). Falls back to direct
-    // Yahoo only if the bridge is down / returns nothing.
+    // QUOTES: AngelOne (when configured) → Yahoo fallback. We deliberately do
+    // NOT use the Dhan bridge for quotes — Dhan is reserved exclusively for
+    // option chains + greeks so we never hit its per-second rate limit.
     let fetched = 0;
     let source = 'NONE';
-    if (bridge && bridge.isConfigured()) {
+    if (angel && angel.isConfigured()) {
       try {
-        const quotes = await bridge.getAllQuotes(REAL_DATA_SYMBOLS);
+        const quotes = await angel.getAllQuotes(REAL_DATA_SYMBOLS);
         for (const [sym, q] of quotes) {
           if (q && q.ltp > 0) { injectQuote(sym, q); fetched++; }
         }
-        if (fetched > 0) source = 'BRIDGE';
+        if (fetched > 0) source = 'ANGELONE';
       } catch (e) {
-        console.warn('[odss-market] Bridge quotes failed, falling back to Yahoo:', (e as Error).message);
+        console.warn('[odss-market] AngelOne quotes failed, falling back to Yahoo:', (e as Error).message);
       }
     }
     if (fetched === 0 && yahoo) { fetched = await injectViaYahoo(yahoo); if (fetched > 0) source = 'YAHOO'; }
