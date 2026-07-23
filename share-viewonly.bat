@@ -13,11 +13,25 @@ setlocal
 set "ODSS_DATA_DIR=%USERPROFILE%\.odss-data"
 set "DATABASE_URL=file:%ODSS_DATA_DIR%\custom.db"
 set "PATH=%USERPROFILE%\.bun\bin;%PATH%"
+
+REM --- Locate the ODSS-ENGINE repo (this file's folder, else C:\ODSS-ENGINE) ---
 set "REPO=%~dp0"
-cd /d "%REPO%"
+if not exist "%REPO%src\app" if exist "C:\ODSS-ENGINE\src\app" set "REPO=C:\ODSS-ENGINE\"
+cd /d "%REPO%" 2>nul
+if not exist "src\app" (
+  echo ============================================================
+  echo  ERROR: Could not find the ODSS-ENGINE project.
+  echo  Run this file from INSIDE your repo folder — i.e. double-click
+  echo      C:\ODSS-ENGINE\share-viewonly.bat
+  echo  ^(not a copy saved in Downloads^).
+  echo ============================================================
+  pause
+  exit /b 1
+)
 
 echo ============================================================
 echo   ODSS - VIEW-ONLY SHARE  (read-only, no source, expires today)
+echo   Repo: %REPO%
 echo ============================================================
 echo The Market Service must be running (start-odss.bat) for live data.
 echo.
