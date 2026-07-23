@@ -93,12 +93,37 @@ export interface OptionRow {
   iv: number;
   volume: number;
   oi: number;
-  oiChange: number;
+  oiChange: number;      // intraday change in OI (vs previous day close)
+  ltpChange?: number;    // intraday option price change (vs previous day close)
   delta: number;
   gamma: number;
   theta: number;
   vega: number;
   moneyness: Moneyness;
+}
+
+// ============================================================
+// OPTIONS "WHO IS IN CONTROL" — order-flow analysis
+// ============================================================
+export type Controller = 'BUYERS' | 'SELLERS' | 'BALANCED';
+export type StrikeFlow = 'LONG_BUILDUP' | 'SHORT_BUILDUP' | 'SHORT_COVERING' | 'LONG_UNWINDING' | 'FLAT';
+
+export interface ControlResult {
+  controller: Controller;      // who is in control right now
+  controlScore: number;        // -100 (sellers/bearish) .. +100 (buyers/bullish)
+  strength: number;            // 0-100 conviction of the read (|controlScore|-ish)
+  bias: Bias;                  // LONG / SHORT / NEUTRAL (directional read)
+  evidence: string[];          // plain-English reasons, strongest first
+  trap: boolean;               // option chain contradicts the price move (trap risk)
+  trapNote?: string;
+  supportStrike: number;       // highest put-OI wall below spot
+  resistanceStrike: number;    // highest call-OI wall above spot
+  maxPain: number;
+  pcr: number;
+  ivSkew: number;              // put IV - call IV (fear gauge)
+  pinStrike: number;           // gamma/OI pin (magnet) strike
+  gammaRegime: 'PINNED' | 'TRENDING' | 'NEUTRAL';
+  timestamp: number;
 }
 
 export interface OptionChain {
@@ -380,6 +405,7 @@ export interface Recommendation {
   rs?: RSRow;
   technical: TechnicalEngineOutput;
   optionChain: OptionChainEngineOutput;
+  control?: ControlResult;
   opportunity: OpportunityRow;
   strike: StrikeSelection;
   entry: EntryPlan;

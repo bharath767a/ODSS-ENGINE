@@ -60,6 +60,13 @@ export interface ConvictionPick {
   roomNotes: string[];         // human-readable room rationale
   fundamentalScore: number;    // 0-100 (daily cached)
   fundamentalRating: string;   // EXCELLENT..POOR or N/A
+  // ── who's in control (real order flow) ──
+  controller?: string;         // BUYERS / SELLERS / BALANCED
+  controlScore?: number;       // -100 (sellers) .. +100 (buyers)
+  controlStrength?: number;    // 0-100
+  controlEvidence?: string[];  // top order-flow reasons
+  trap?: boolean;              // chain contradicts this side (trap risk)
+  trapNote?: string;
   primeScore: number;          // 0-100 actionability (best-to-take-now)
   isPrime: boolean;            // one of the top-2 to take now
   whyBest: string;             // one-line rationale when isPrime
@@ -549,13 +556,24 @@ export function runConvictionEngine(
     const room = roomToRun(direction, price, changePct, rec.technical, rec.optionChain);
     const stability = calculateStability(opp.symbol);
 
-    // Composite conviction — room is a first-class driver (18%).
+    // ── Who's in control (real order flow) → direction-aligned fit 0-100 ──
+    const control = rec.control;
+    const controlScore = control?.controlScore ?? 0;             // -100..+100
+    const controlFit = control
+      ? clamp(direction === 'CE' ? 50 + controlScore / 2 : 50 - controlScore / 2)
+      : 50; // no real chain → neutral, don't help or hurt
+    // Trap contradicts THIS side (bull trap hurts CE, bear trap hurts PE).
+    const controlContradicts = !!control && controlFit < 40;
+    const trapAgainst = !!control?.trap && controlContradicts;
+
+    // Composite conviction — technical + REAL order-flow control + room lead.
     const conviction = Math.round(
-      0.30 * th +
-      0.22 * ocH +
-      0.10 * fundFit +
-      0.10 * clamp(50 + news.boost * 2.5) +
-      0.18 * room.score +
+      0.26 * th +
+      0.16 * ocH +
+      0.16 * controlFit +
+      0.08 * fundFit +
+      0.08 * clamp(50 + news.boost * 2.5) +
+      0.16 * room.score +
       0.10 * stability.score,
     );
 
@@ -565,12 +583,13 @@ export function runConvictionEngine(
     const confidence = clamp((rec.decision?.confidence ?? 50) + news.boost);
     const zone = calculateEntryZone(price, direction);
     let entrySignal: EntrySignal = 'WAIT';
-    if (conviction >= 68 && room.score >= 50 && stability.class !== 'VOLATILE' && news.direction !== 'NEGATIVE') entrySignal = 'ENTER_NOW';
-    else if (conviction < 50 || room.score < 35 || (news.direction === 'NEGATIVE' && news.boost <= -10)) entrySignal = 'AVOID';
+    // Order flow must not be against us to greenlight an entry.
+    if (conviction >= 68 && room.score >= 50 && controlFit >= 50 && stability.class !== 'VOLATILE' && news.direction !== 'NEGATIVE') entrySignal = 'ENTER_NOW';
+    else if (conviction < 50 || room.score < 35 || controlContradicts || (news.direction === 'NEGATIVE' && news.boost <= -10)) entrySignal = 'AVOID';
 
-    // primeScore — actionability of taking this RIGHT NOW.
+    // primeScore — actionability of taking this RIGHT NOW (control-aware).
     const primeScore = Math.round(
-      0.26 * th + 0.20 * ocH + 0.16 * room.score + 0.14 * fundFit + 0.12 * confidence + 0.12 * stability.score,
+      0.24 * th + 0.16 * ocH + 0.18 * controlFit + 0.12 * room.score + 0.10 * fundFit + 0.10 * confidence + 0.10 * stability.score,
     );
 
     const pick: ConvictionPick = {
@@ -583,6 +602,9 @@ export function runConvictionEngine(
       technicalHealth: Math.round(th),
       roomScore: room.score, roomNotes: room.notes,
       fundamentalScore: fund.total, fundamentalRating: fund.rating,
+      controller: control?.controller, controlScore: control?.controlScore,
+      controlStrength: control?.strength, controlEvidence: control?.evidence?.slice(0, 3),
+      trap: trapAgainst, trapNote: trapAgainst ? control?.trapNote : undefined,
       primeScore, isPrime: false, whyBest: '',
       stability: stability.class, stabilityScore: Math.round(stability.score), trendScore: Math.round(stability.trend), consecutiveTop10: stability.consecutiveTop,
       newsMomentum: news.direction, newsBoost: news.boost, newsHeadlines: news.headlines, hasEarningsNews: news.hasEarnings,
@@ -614,7 +636,9 @@ export function runConvictionEngine(
 
   // ── Step 4: PRIME picks — best 1-2 to take now (gated on soundness + room) ──
   const primeCandidates = [...cePicks, ...pePicks]
-    .filter(p => p.technicalHealth >= PRIME_MIN_TECH && p.roomScore >= PRIME_MIN_ROOM && p.convictionScore >= PRIME_MIN_CONVICTION && p.newsMomentum !== 'NEGATIVE')
+    .filter(p => p.technicalHealth >= PRIME_MIN_TECH && p.roomScore >= PRIME_MIN_ROOM && p.convictionScore >= PRIME_MIN_CONVICTION && p.newsMomentum !== 'NEGATIVE'
+      // Never crown a PRIME pick that the real order flow is fighting.
+      && !p.trap && (p.controlScore === undefined || (p.direction === 'CE' ? p.controlScore >= -10 : p.controlScore <= 10)))
     .sort((a, b) => b.primeScore - a.primeScore);
   const primePicks = primeCandidates.slice(0, 2);
   for (const p of primePicks) {
@@ -703,9 +727,9 @@ function buildWhyBest(p: ConvictionPick): string {
   bits.push(`${p.direction === 'CE' ? 'Bullish' : 'Bearish'} setup`);
   bits.push(`tech ${p.technicalHealth}`);
   bits.push(`room ${p.roomScore}`);
+  if (p.controller && p.controller !== 'BALANCED') bits.push(`${p.controller.toLowerCase()} in control (${p.controlStrength ?? 0}%)`);
   if (p.fundamentalRating && p.fundamentalRating !== 'N/A') bits.push(`fundamentals ${p.fundamentalRating.toLowerCase()}`);
-  if (p.optionChainScore >= 60) bits.push('option-chain confirms');
-  const lead = p.roomNotes?.[0];
+  const lead = p.controlEvidence?.[0] ?? p.roomNotes?.[0];
   return `${bits.join(', ')}${lead ? ` — ${lead}` : ''}`;
 }
 

@@ -368,6 +368,8 @@ class DhanClient:
                     "putVega": float(pe.get("greeks", {}).get("vega", 0)),
                     "callOIChange": int(ce.get("oi", 0) or 0) - int(ce.get("previous_oi", 0) or 0),
                     "putOIChange": int(pe.get("oi", 0) or 0) - int(pe.get("previous_oi", 0) or 0),
+                    "callPrevClose": float(ce.get("previous_close_price", 0) or 0),
+                    "putPrevClose": float(pe.get("previous_close_price", 0) or 0),
                 })
 
             total_call_oi_chg = sum(r["callOIChange"] for r in option_rows)

@@ -49,8 +49,11 @@ export function mapBridgeChain(symbol: string, raw: any): OptionChain | null {
     const callOI = Number(s.callOI) || 0;
     const putOI = Number(s.putOI) || 0;
     const p = prev.get(strike);
-    const callOIChange = p ? callOI - p.c : 0;
-    const putOIChange = p ? putOI - p.p : 0;
+    // Prefer Dhan's INTRADAY change-in-OI (oi - previous_day_oi) — the signal
+    // traders actually read. Fall back to our snapshot delta (for synthetic).
+    const hasBridgeOIChg = s.callOIChange !== undefined && s.callOIChange !== null;
+    const callOIChange = hasBridgeOIChg ? Number(s.callOIChange) : (p ? callOI - p.c : 0);
+    const putOIChange = (s.putOIChange !== undefined && s.putOIChange !== null) ? Number(s.putOIChange) : (p ? putOI - p.p : 0);
     nextPrev.set(strike, { c: callOI, p: putOI });
 
     totalCallOI += callOI; totalPutOI += putOI;
@@ -62,12 +65,15 @@ export function mapBridgeChain(symbol: string, raw: any): OptionChain | null {
 
     const callLTP = Number(s.callLTP) || 0;
     const putLTP = Number(s.putLTP) || 0;
+    const callPrevClose = Number(s.callPrevClose) || 0;
+    const putPrevClose = Number(s.putPrevClose) || 0;
     rows.push({
       strike, type: 'CE', ltp: callLTP,
       bid: callLTP > 0 ? +(callLTP * 0.995).toFixed(2) : 0,
       ask: callLTP > 0 ? +(callLTP * 1.005).toFixed(2) : 0,
       iv: Number(s.callIV) || 0, volume: Number(s.callVolume) || 0,
       oi: callOI, oiChange: callOIChange,
+      ltpChange: callPrevClose > 0 ? +(callLTP - callPrevClose).toFixed(2) : undefined,
       delta: Number(s.callDelta) || 0, gamma: Number(s.callGamma) || 0,
       theta: Number(s.callTheta) || 0, vega: Number(s.callVega) || 0,
       moneyness: moneyness('CE'),
@@ -78,6 +84,7 @@ export function mapBridgeChain(symbol: string, raw: any): OptionChain | null {
       ask: putLTP > 0 ? +(putLTP * 1.005).toFixed(2) : 0,
       iv: Number(s.putIV) || 0, volume: Number(s.putVolume) || 0,
       oi: putOI, oiChange: putOIChange,
+      ltpChange: putPrevClose > 0 ? +(putLTP - putPrevClose).toFixed(2) : undefined,
       delta: Number(s.putDelta) || 0, gamma: Number(s.putGamma) || 0,
       theta: Number(s.putTheta) || 0, vega: Number(s.putVega) || 0,
       moneyness: moneyness('PE'),

@@ -82,7 +82,7 @@ function connect() {
   //    route ?XTransformPort=3002 to :3002.
   //  - Local dev opened directly on :3000 (plain `next dev`, no proxy): there is
   //    nothing to route the query, so connect straight to localhost:3002.
-  const baseOpts = { path: '/', transports: ['websocket', 'polling'], reconnection: true, reconnectionDelay: 2000 } as const;
+  const baseOpts = { path: '/', transports: ['websocket', 'polling'] as string[], reconnection: true, reconnectionDelay: 2000 };
   const loc = typeof window !== 'undefined' ? window.location : null;
   const isLocalDirect = !!loc && (loc.hostname === 'localhost' || loc.hostname === '127.0.0.1') && loc.port === '3000';
   if (isLocalDirect) {

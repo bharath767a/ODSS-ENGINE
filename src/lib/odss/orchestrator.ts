@@ -27,6 +27,7 @@ import { runDecisionEngine } from './engines/decision-engine';
 import { runTradeManagementEngine } from './engines/trade-management-engine';
 import { runExitEngine } from './engines/exit-engine';
 import { runConvictionEngine } from './engines/conviction-engine';
+import { runControlEngine } from './engines/oc-control';
 import { createInitialTrade, nextTradeState, applyStateTransition } from './state-machine';
 import {
   getStore,
@@ -36,7 +37,7 @@ import {
   archiveTradeToJournal,
   logDecision,
 } from './store/store';
-import { getQuote } from './simulator/market-simulator';
+import { getQuote, getOptionChain } from './simulator/market-simulator';
 import { explainDecision, explainTradeManagement } from './ai/explainer';
 import { getConfig } from './config';
 
@@ -98,6 +99,15 @@ export async function runScan(): Promise<void> {
         risk,
       });
 
+      // "Who's in control" — real order-flow read from the live Dhan chain.
+      // getOptionChain returns null in strict real-data mode when no real chain
+      // is available, so control stays undefined rather than fabricated.
+      let control;
+      try {
+        const rawChain = getOptionChain(opp.symbol);
+        if (rawChain) control = runControlEngine(rawChain, getQuote(opp.symbol)?.changePct ?? 0);
+      } catch { /* no chain → no control */ }
+
       const rec: Recommendation = {
         symbol: opp.symbol,
         sector: opp.sector,
@@ -107,6 +117,7 @@ export async function runScan(): Promise<void> {
         rs: rsRow,
         technical,
         optionChain,
+        control,
         opportunity: opp,
         strike,
         entry,

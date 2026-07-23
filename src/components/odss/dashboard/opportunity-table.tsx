@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input';
 import { useODSS } from '@/hooks/use-odss';
 import { DirectionBadge } from '../shared/badges';
 import { ConfluenceCard } from './confluence-card';
-import { Trophy, ChevronRight, Lock, TrendingUp, TrendingDown, Newspaper, Target, Shield, Zap, Plus, Check, X, Loader2, Activity } from 'lucide-react';
+import { Trophy, ChevronRight, Lock, TrendingUp, TrendingDown, Newspaper, Target, Shield, Zap, Plus, Check, X, Loader2, Activity, Users, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Recommendation } from '@/lib/odss/types';
 
@@ -385,6 +385,26 @@ function SimplePickCard({ pick, idx, q, rec, isTaken, onSelect, pickConfluence }
       {/* Intraday Confluence Card */}
       {pickConfluence && (
         <ConfluenceCard confluence={pickConfluence} />
+      )}
+      {/* WHO'S IN CONTROL — real order-flow read */}
+      {pick.controller && (
+        <div className="mt-1.5 flex items-center gap-1.5 border-t border-border/10 pt-1.5">
+          <span
+            className={cn('flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9px] font-bold',
+              pick.controller === 'BUYERS' ? 'bg-bull/20 text-bull' : pick.controller === 'SELLERS' ? 'bg-bear/20 text-bear' : 'bg-muted/30 text-muted-foreground')}
+            title={pick.controlEvidence?.join(' · ')}
+          >
+            <Users className="h-2.5 w-2.5" />{pick.controller} {pick.controlStrength ?? 0}%
+          </span>
+          {pick.controlEvidence?.[0] && (
+            <span className="line-clamp-1 font-mono text-[9px] text-muted-foreground">{pick.controlEvidence[0]}</span>
+          )}
+        </div>
+      )}
+      {pick.trap && (
+        <div className="mt-1 flex items-start gap-1 rounded border border-amber-400/30 bg-amber-400/10 px-2 py-1 font-mono text-[9px] text-amber-600">
+          <AlertTriangle className="mt-0.5 h-2.5 w-2.5 shrink-0" /><span>{pick.trapNote ?? 'Order flow contradicts price — trap risk'}</span>
+        </div>
       )}
       {/* News headlines */}
       {pick.newsHeadlines?.length > 0 && (
