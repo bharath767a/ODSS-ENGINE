@@ -30,8 +30,10 @@
  * (strict real-data mode returns null chains off-hours, so this never fabricates).
  */
 import type { OptionChain, OptionRow, ControlResult, Controller, Bias, StrikeFlow } from '../types';
+import { OI_PACK } from '../oi-knowledge-pack';
 
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x));
+const W = OI_PACK.flowWeights;
 
 function classifyFlow(oiChange: number, priceChange: number | undefined, oi: number): StrikeFlow {
   const oiUp = oiChange > oi * 0.002;      // >0.2% of standing OI = meaningful
@@ -47,12 +49,13 @@ function classifyFlow(oiChange: number, priceChange: number | undefined, oi: num
   return oiUp ? 'SHORT_BUILDUP' : 'LONG_UNWINDING';
 }
 
-// Bullishness of a flow bucket for calls / puts (+1 bull … −1 bear).
+// Bullishness of a flow bucket for calls / puts, magnitudes from the knowledge
+// pack (WRITING is the strongest signal, then covering, buying, unwinding).
 function callSign(f: StrikeFlow): number {
-  return f === 'LONG_BUILDUP' ? 1 : f === 'SHORT_COVERING' ? 1 : f === 'SHORT_BUILDUP' ? -1 : f === 'LONG_UNWINDING' ? -0.6 : 0;
+  return f === 'LONG_BUILDUP' ? W.buying : f === 'SHORT_COVERING' ? W.covering : f === 'SHORT_BUILDUP' ? -W.writing : f === 'LONG_UNWINDING' ? -W.unwinding : 0;
 }
 function putSign(f: StrikeFlow): number {
-  return f === 'SHORT_BUILDUP' ? 1 : f === 'LONG_UNWINDING' ? 0.6 : f === 'LONG_BUILDUP' ? -1 : f === 'SHORT_COVERING' ? -1 : 0;
+  return f === 'SHORT_BUILDUP' ? W.writing : f === 'LONG_UNWINDING' ? W.unwinding : f === 'LONG_BUILDUP' ? -W.buying : f === 'SHORT_COVERING' ? -W.covering : 0;
 }
 
 function medianStep(strikes: number[]): number {
@@ -69,7 +72,7 @@ const flowLabel = (f: StrikeFlow) => f.replace('_', ' ').toLowerCase();
 export function runControlEngine(chain: OptionChain, underlyingChangePct = 0): ControlResult {
   const spot = chain.spot;
   const step = medianStep(chain.strikes.map(r => r.strike));
-  const sigma = 4 * step; // near-the-money weighting width
+  const sigma = OI_PACK.proximitySigmaStrikes * step; // near-the-money weighting width
 
   const calls = chain.strikes.filter(r => r.type === 'CE');
   const puts = chain.strikes.filter(r => r.type === 'PE');
@@ -89,7 +92,7 @@ export function runControlEngine(chain: OptionChain, underlyingChangePct = 0): C
     if (proximity(r.strike) > 0.5) { nearOI += r.oi; nearAbsOIChg += Math.abs(r.oiChange); nearVol += r.volume; }
     const f = classifyFlow(r.oiChange, r.ltpChange, r.oi);
     if (f === 'FLAT') return;
-    const w = proximity(r.strike) * (0.5 + 0.5 * Math.min(1, Math.abs(r.delta)));
+    const w = proximity(r.strike) * ((1 - OI_PACK.deltaWeight) + OI_PACK.deltaWeight * Math.min(1, Math.abs(r.delta)));
     const mag = Math.abs(r.oiChange) * w;
     const sign = isCall ? callSign(f) : putSign(f);
     if (sign > 0) bull += mag * sign; else bear += mag * -sign;
@@ -116,19 +119,19 @@ export function runControlEngine(chain: OptionChain, underlyingChangePct = 0): C
 
   // ── Modifiers (kept modest so raw flow dominates) ──
   const pcr = chain.pcr || 1;
-  if (pcr > 1.3) controlScore += 6; else if (pcr < 0.7) controlScore -= 6;
+  if (pcr > OI_PACK.pcrBull) controlScore += OI_PACK.pcrMod; else if (pcr < OI_PACK.pcrBear) controlScore -= OI_PACK.pcrMod;
   const maxPain = chain.maxPainStrike || spot;
   if (spot > 0 && maxPain > 0) {
     const pull = ((maxPain - spot) / spot) * 100; // + = pull up toward max pain
-    controlScore += clamp(pull * 4, -6, 6);
+    controlScore += clamp(pull * 4, -OI_PACK.maxPainMod, OI_PACK.maxPainMod);
   }
   // IV skew (fear): OTM put IV vs OTM call IV
   const otmPuts = puts.filter(r => r.strike < spot).sort((a, b) => b.strike - a.strike).slice(0, 3);
   const otmCalls = calls.filter(r => r.strike > spot).sort((a, b) => a.strike - b.strike).slice(0, 3);
   const avg = (rs: OptionRow[]) => rs.length ? rs.reduce((s, r) => s + (r.iv || 0), 0) / rs.length : 0;
   const ivSkew = +(avg(otmPuts) - avg(otmCalls)).toFixed(2);
-  if (ivSkew > 2) controlScore -= 4;      // rich put IV = hedging/fear
-  else if (ivSkew < -1) controlScore += 3; // rich call IV = upside chase
+  if (ivSkew > OI_PACK.ivSkewRichPut) controlScore -= OI_PACK.ivSkewMod;       // rich put IV = hedging/fear
+  else if (ivSkew < OI_PACK.ivSkewRichCall) controlScore += OI_PACK.ivSkewMod - 1; // rich call IV = upside chase
 
   controlScore = Math.round(clamp(controlScore, -100, 100));
 
@@ -149,9 +152,9 @@ export function runControlEngine(chain: OptionChain, underlyingChangePct = 0): C
       : (spot >= resistanceStrike || spot <= supportStrike) ? 'TRENDING' : 'NEUTRAL';
 
   // ── Controller + bias ──
-  const controller: Controller = controlScore > 20 ? 'BUYERS' : controlScore < -20 ? 'SELLERS' : 'BALANCED';
+  const controller: Controller = controlScore > OI_PACK.controlBuyers ? 'BUYERS' : controlScore < OI_PACK.controlSellers ? 'SELLERS' : 'BALANCED';
   const strength = Math.min(100, Math.abs(controlScore));
-  const bias: Bias = controlScore > 15 ? 'LONG' : controlScore < -15 ? 'SHORT' : 'NEUTRAL';
+  const bias: Bias = controlScore > OI_PACK.controlBias ? 'LONG' : controlScore < -OI_PACK.controlBias ? 'SHORT' : 'NEUTRAL';
 
   // ── Trap: price and positioning disagree ──
   let trap = false; let trapNote: string | undefined;
@@ -183,7 +186,7 @@ export function runControlEngine(chain: OptionChain, underlyingChangePct = 0): C
   const flowIntensity = nearOI > 0
     ? Math.round(clamp((nearAbsOIChg / nearOI) * 220 + (nearVol / nearOI) * 55, 0, 100))
     : 0;
-  const earlyFlow = flowIntensity >= 55 && strength >= 55 && Math.abs(controlScore) >= 30;
+  const earlyFlow = flowIntensity >= OI_PACK.earlyFlowIntensity && strength >= OI_PACK.earlyFlowStrength && Math.abs(controlScore) >= OI_PACK.earlyFlowScore;
   if (earlyFlow) evidence.unshift(`🔥 Early flow — fresh ${controlScore > 0 ? 'bullish' : 'bearish'} positioning (intensity ${flowIntensity})`);
 
   return {

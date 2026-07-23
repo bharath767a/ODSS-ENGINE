@@ -46,6 +46,7 @@ import type {
 } from '../types';
 import { getFundamentalProvider } from '../fundamentals/provider';
 import { analyzeFundamentals } from '../fundamentals/analyzer';
+import { OI_PACK } from '../oi-knowledge-pack';
 
 export type EntrySignal = 'ENTER_NOW' | 'WAIT' | 'AVOID';
 export type StabilityClass = 'STABLE' | 'MODERATE' | 'VOLATILE';
@@ -655,21 +656,23 @@ export function runConvictionEngine(
       0.24 * th + 0.16 * ocH + 0.18 * controlFit + 0.12 * room.score + 0.10 * fundFit + 0.10 * confidence + 0.10 * stability.score,
     );
 
-    // ── CONFIDENCE GRADE — how many INDEPENDENT signals agree (take A+/A only) ──
+    // ── CONFIDENCE GRADE — how many INDEPENDENT signals agree, GATED on order
+    // flow (knowledge pack). You cannot be A/A+ if the chain is against you. ──
+    const G = OI_PACK.grade;
     const confirmations: Array<[boolean, string]> = [
-      [th >= 62, 'technical'],
-      [controlFit >= 58, 'order-flow'],
-      [room.score >= 52, 'room-to-target'],
-      [ocH >= 56, 'option-chain'],
-      [fundFit >= 55, 'fundamentals'],
+      [th >= G.tech, 'technical'],
+      [controlFit >= G.control, 'order-flow'],
+      [room.score >= G.room, 'room-to-target'],
+      [ocH >= G.oc, 'option-chain'],
+      [fundFit >= G.fund, 'fundamentals'],
       [news.direction !== 'NEGATIVE', 'no news headwind'],
     ];
     const gradeReasons = confirmations.filter(c => c[0]).map(c => c[1]);
     const gradeScore = gradeReasons.length;
-    const strongControl = controlFit >= 65 && !controlContradicts;
-    const grade = (gradeScore >= 5 && strongControl && room.score >= 55) ? 'A+'
-      : gradeScore >= 5 ? 'A'
-      : gradeScore >= 4 ? (strongControl ? 'A' : 'B')
+    const flowWith = controlFit >= G.control;              // order flow on our side
+    const grade = controlContradicts ? 'C'                  // chain against us → never above C
+      : (gradeScore >= 5 && controlFit >= G.aPlusControl && room.score >= G.aRoom) ? 'A+'
+      : (gradeScore >= 4 && flowWith) ? 'A'
       : gradeScore >= 3 ? 'B'
       : 'C';
 
