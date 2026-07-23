@@ -342,7 +342,11 @@ function SimplePickCard({ pick, idx, q, rec, isTaken, onSelect, pickConfluence }
     <div
       className={cn(
         'cursor-pointer rounded-lg border p-2.5 transition-all hover:bg-info/5',
-        pick.locked ? 'border-ai/40 bg-gradient-to-br from-ai/10 to-transparent'
+        // Active squeeze = continuous pulsing highlight (so you notice it).
+        pick.squeeze?.status === 'LIVE' ? 'border-bear/50 ring-2 ring-bear/40 animate-pulse bg-bear/5'
+          : pick.squeeze?.status === 'PEAKING' ? 'border-orange-500/50 ring-1 ring-orange-500/30 bg-orange-500/5'
+          : pick.squeeze?.status === 'FORMING' ? 'border-warn/50 ring-1 ring-warn/30 bg-warn/5'
+          : pick.locked ? 'border-ai/40 bg-gradient-to-br from-ai/10 to-transparent'
           : pick.entrySignal === 'ENTER_NOW' ? 'border-bull/30 bg-bull/5' : 'border-border/40 bg-card/30',
       )}
       onClick={() => rec && onSelect?.(rec)}
@@ -376,11 +380,31 @@ function SimplePickCard({ pick, idx, q, rec, isTaken, onSelect, pickConfluence }
                 >{pick.grade}</span>
               )}
               {pick.earlyFlow && <span className="rounded bg-orange-500/20 px-1 py-0.5 font-mono text-[9px] font-bold text-orange-600" title="Fresh, aggressive order-flow ignition — caught early">🔥 EARLY</span>}
+              {pick.freshEntry && <span className="rounded bg-info/20 px-1 py-0.5 font-mono text-[9px] font-bold text-info" title="New position-building leg — not a continuation of an older alert">🆕 FRESH</span>}
+              {pick.squeeze && pick.squeeze.status !== 'NONE' && pick.squeeze.status !== 'DONE' && (
+                <span
+                  className={cn('rounded px-1 py-0.5 font-mono text-[9px] font-black',
+                    pick.squeeze.status === 'LIVE' ? 'bg-bear/30 text-bear animate-pulse'
+                      : pick.squeeze.status === 'PEAKING' ? 'bg-orange-500/25 text-orange-600'
+                      : 'bg-warn/25 text-warn')}
+                  title={`${pick.squeeze.note} · ${pick.squeeze.action}`}
+                >
+                  ⚡ {pick.squeeze.status === 'LIVE' ? 'SQUEEZE LIVE' : pick.squeeze.status === 'PEAKING' ? 'PEAKING' : 'SQUEEZE SETUP'}
+                </span>
+              )}
               {pick.isPrime && <span className="flex items-center gap-0.5 rounded bg-warn/25 px-1 py-0.5 font-mono text-[9px] font-bold text-warn" title={pick.whyBest}><Trophy className="h-2.5 w-2.5" />PRIME</span>}
               {pick.locked && <span className="flex items-center gap-0.5 rounded bg-ai/20 px-1 py-0.5 font-mono text-[9px] font-bold text-ai"><Lock className="h-2.5 w-2.5" />{pick.lockMinutesLeft}m</span>}
               {isTaken && <span className="rounded bg-bull/20 px-1 py-0.5 font-mono text-[9px] font-bold text-bull"><Check className="inline h-2 w-2" /> TAKEN</span>}
             </div>
-            <div className="font-mono text-[9px] uppercase tracking-widest text-muted-foreground">{pick.sector}</div>
+            <div className="flex items-center gap-1.5 font-mono text-[9px] uppercase tracking-widest text-muted-foreground">
+              <span>{pick.sector}</span>
+              {pick.firstSeenAt && (
+                <span className="normal-case text-muted-foreground/70">
+                  · alerted {new Date(pick.firstSeenAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                  {pick.movedSincePct ? ` (${pick.movedSincePct >= 0 ? '▲' : '▼'}${Math.abs(pick.movedSincePct)}% since)` : ''}
+                </span>
+              )}
+            </div>
           </div>
         </div>
         <div className="text-right">

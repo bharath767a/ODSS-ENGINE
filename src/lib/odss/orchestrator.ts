@@ -136,28 +136,13 @@ export async function runScan(): Promise<void> {
     }
     try { store.conviction = runConvictionEngine(opportunities.rows, store.recommendations, liveQuotes); } catch {}
 
-    // 5b. Smart Money Bias (FII/DII positioning) + Squeeze Detection
+    // 5b. Smart Money Bias (FII/DII positioning). Squeeze detection runs in the
+    // market service where the REAL Dhan option chains are injected (not here —
+    // this process only has the summarised option-chain engine output).
     try {
-      const { fetchSmartMoneyData, getSmartMoneyMultiplier } = await import('./engines/smart-money-bias');
-      const { detectSqueezes } = await import('./engines/squeeze-detector');
-
-      // Fetch smart money data (cached, updates daily)
+      const { fetchSmartMoneyData } = await import('./engines/smart-money-bias');
       const smartMoney = await fetchSmartMoneyData();
       (store as any).smartMoney = smartMoney;
-
-      // Detect squeezes for top symbols
-      const topSymbols = opportunities.rows.slice(0, 10).map(o => o.symbol);
-      const squeezes = detectSqueezes(
-        topSymbols,
-        (sym) => {
-          try { return runOptionChainEngine(sym); } catch { return null; }
-        },
-        (sym) => {
-          const q = getQuote(sym);
-          return q?.ltp ?? 0;
-        }
-      );
-      (store as any).squeezes = squeezes;
     } catch (e) {
       // Non-critical — don't fail the scan
     }

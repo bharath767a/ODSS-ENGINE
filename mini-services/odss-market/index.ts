@@ -33,6 +33,7 @@ import { runControlEngine } from '../../src/lib/odss/engines/oc-control';
 import { mapBridgeChain } from '../../src/lib/odss/data-providers/option-chain-feed';
 import { buildEODRecord, buildEODReport, saveEODReport, loadEODReport } from '../../src/lib/odss/engines/eod-positioning';
 import { STOCKS } from '../../src/lib/odss/universe';
+import { updateSqueeze, getActiveSqueezes, getSqueezeFor, getCompletedSqueezes, resetSqueezeLog } from '../../src/lib/odss/engines/squeeze-detector';
 import { recordNewsShocks } from '../../src/lib/odss/news/shocks-store';
 import { getMarketSession, shouldEngineBeActive, shouldPollRealData } from '../../src/lib/odss/market-session';
 import { dataPath, ensureDataDir } from '../../src/lib/odss/data-dir';
@@ -249,9 +250,12 @@ async function fetchOptionChainsAndConfluence() {
     const chains = await fetchAndInjectOptionChains(bridge, symbols);
     for (const [sym, chain] of chains) {
       try { updateOCConfluence(sym, chain, dirBySym.get(sym) ?? 'CE'); } catch {}
+      try { updateSqueeze(sym, chain, OC_INDEX_SYMBOLS.includes(sym)); } catch {}
       try { archiveOptionChain(sym, chain); } catch {}
     }
     (store as any).ocConfluence = getAllOCConfluence();
+    (store as any).squeezes = getActiveSqueezes();
+    (store as any).completedSqueezes = getCompletedSqueezes().slice(0, 20);
     // Index control read (direction-agnostic) for the NIFTY/BANKNIFTY benchmark
     // cards. PERSIST across cycles — a one-off 429 on an index must not blank the
     // card; we keep the last good read until a fresh chain replaces it.
@@ -330,6 +334,18 @@ setInterval(() => {
 }, 60_000);
 console.log('[odss-market] EOD positioning scanner armed (auto after close)');
 
+// Reset the completed-squeeze log once at the start of each trading day.
+let squeezeLogDay = '';
+setInterval(() => {
+  try {
+    const s = getMarketSession();
+    if ((s.isPreOpen || s.isOpen) && squeezeLogDay !== istDayKey()) {
+      resetSqueezeLog(); squeezeLogDay = istDayKey();
+      console.log('[odss-market] Squeeze completed-log reset for the new session');
+    }
+  } catch { /* ignore */ }
+}, 60_000);
+
 // Blend option-chain/delta confluence into picks + active trade for entry/exit timing.
 function enrichWithOCConfluence(store: any): void {
   try {
@@ -337,6 +353,8 @@ function enrichWithOCConfluence(store: any): void {
     const enrich = (picks: any[]) => {
       if (!Array.isArray(picks)) return;
       for (const p of picks) {
+        // Attach any live short-covering squeeze on this symbol to the pick.
+        try { const sq = getSqueezeFor(p.symbol); if (sq) p.squeeze = sq; } catch {}
         const oc = getOCConfluence(p.symbol);
         if (!oc) continue;
         p.ocScore = oc.ocScore; p.ocEntrySignal = oc.entrySignal; p.ocExitSignal = oc.exitSignal;
@@ -576,6 +594,7 @@ setInterval(async () => {
         takenTrades: listTaken('ACTIVE').map(analyzeTakenTrade),
         smartMoney: (store as any).smartMoney || null,
         squeezes: (store as any).squeezes || [],
+        completedSqueezes: (store as any).completedSqueezes || [],
         ocConfluence,
         indexControl,
         decisionLog: store.decisionLog.slice(0, 50),
@@ -596,6 +615,7 @@ setInterval(async () => {
       topRecommendations: Array.from(store.recommendations.values()).slice(0, 10),
         smartMoney: (store as any).smartMoney || null,
         squeezes: (store as any).squeezes || [],
+        completedSqueezes: (store as any).completedSqueezes || [],
         ocConfluence,
         indexControl,
       decisionLog: store.decisionLog.slice(0, 20),
@@ -645,6 +665,7 @@ io.on('connection', (socket) => {
     topRecommendations: Array.from(store.recommendations.values()).slice(0, 10),
         smartMoney: (store as any).smartMoney || null,
         squeezes: (store as any).squeezes || [],
+        completedSqueezes: (store as any).completedSqueezes || [],
     decisionLog: store.decisionLog.slice(0, 30),
   });
 
@@ -679,6 +700,7 @@ io.on('connection', (socket) => {
         topRecommendations: Array.from(s.recommendations.values()).slice(0, 10),
         smartMoney: (s as any).smartMoney || null,
         squeezes: (s as any).squeezes || [],
+        completedSqueezes: (s as any).completedSqueezes || [],
         decisionLog: s.decisionLog.slice(0, 20),
       });
     } catch (e) {
@@ -830,6 +852,7 @@ function broadcastUpdate() {
     topRecommendations: Array.from(s.recommendations.values()).slice(0, 10),
         smartMoney: (s as any).smartMoney || null,
         squeezes: (s as any).squeezes || [],
+        completedSqueezes: (s as any).completedSqueezes || [],
     decisionLog: s.decisionLog.slice(0, 20),
   });
 }

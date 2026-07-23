@@ -72,6 +72,9 @@ export interface ConvictionPick {
   gradeScore?: number;         // 0-6 aligned confirmations
   gradeReasons?: string[];     // which signals confirmed
   earlyFlow?: boolean;         // fresh order-flow ignition — early mover
+  firstSeenAt?: number;        // when this symbol first entered the book (epoch ms)
+  movedSincePct?: number;      // % the underlying moved since the first alert
+  freshEntry?: boolean;        // new position-building leg (not a continuation)
   // ── plain-English guidance (for non-traders) ──
   plainAction?: 'BUY NOW' | 'CONSIDER' | 'WAIT' | 'SKIP' | 'WATCH';
   plainMessage?: string;       // one clear human sentence: what to do & why
@@ -134,6 +137,7 @@ interface SideState {
   candidacy: Record<string, number>;   // consecutive scans as candidate (pre-promo)
   absence: Record<string, number>;     // scans absent from candidate pool
   challenge: Record<string, number>;   // consecutive scans a challenger beats weakest incumbent
+  firstSeen: Record<string, { ts: number; price: number }>; // first-alert time+price per symbol
 }
 interface PersistedState {
   scoreHistory: Record<string, ScoreRecord[]>;
@@ -147,7 +151,7 @@ interface PersistedState {
   watchlistAbsence: Record<string, number>;
 }
 
-function emptySide(): SideState { return { set: [], dwell: {}, candidacy: {}, absence: {}, challenge: {} }; }
+function emptySide(): SideState { return { set: [], dwell: {}, candidacy: {}, absence: {}, challenge: {}, firstSeen: {} }; }
 
 let scoreHistory = new Map<string, ScoreRecord[]>();
 let ema = new Map<string, number>();
@@ -519,6 +523,7 @@ function processSide(
       side.dwell[sym] = 1;
       side.candidacy[sym] = 0;
       side.absence[sym] = 0;
+      side.firstSeen[sym] = { ts: Date.now(), price: scored.get(sym)?.currentPrice ?? 0 };
     }
   }
 
@@ -541,6 +546,7 @@ function processSide(
           removeFromSide(side, weakest);
           side.set.push(sym);
           side.dwell[sym] = 1; side.absence[sym] = 0; side.challenge[sym] = 0;
+          side.firstSeen[sym] = { ts: Date.now(), price: scored.get(sym)?.currentPrice ?? 0 };
           swapped = true;
         }
       } else {
@@ -562,6 +568,7 @@ function processSide(
 function removeFromSide(side: SideState, sym: string): void {
   side.set = side.set.filter(s => s !== sym);
   delete side.dwell[sym]; delete side.absence[sym]; delete side.candidacy[sym]; delete side.challenge[sym];
+  delete side.firstSeen[sym]; // so a re-entry gets a fresh first-alert time
 }
 
 // ============================================================
@@ -737,16 +744,22 @@ export function runConvictionEngine(
   processSide(pe, 'PE', peCandidates, scored);
 
   // ── Step 3: materialise the stable books (fall back to last snapshot) ──
-  const materialise = (order: string[]): ConvictionPick[] => {
+  const materialise = (side: SideState, order: string[]): ConvictionPick[] => {
     const out: ConvictionPick[] = [];
     order.forEach((sym, i) => {
       const p = scored.get(sym) ?? lastPick.get(sym);
-      if (p) { const c = { ...p, rank: i + 1 }; out.push(c); }
+      if (!p) return;
+      const fs = side.firstSeen?.[sym];
+      const movedSincePct = fs && fs.price > 0 ? +(((p.currentPrice - fs.price) / fs.price) * 100).toFixed(1) : 0;
+      // Fresh = just alerted (first ~3 min in the book), OR a new order-flow
+      // ignition (next leg) — vs a continuation of an older alert.
+      const freshEntry = (fs ? now - fs.ts < 3 * 60_000 : false) || !!p.earlyFlow;
+      out.push({ ...p, rank: i + 1, firstSeenAt: fs?.ts, movedSincePct, freshEntry });
     });
     return out;
   };
-  const cePicks = materialise(ce.set);
-  const pePicks = materialise(pe.set);
+  const cePicks = materialise(ce, ce.set);
+  const pePicks = materialise(pe, pe.set);
 
   // ── Step 4: PRIME picks — best 1-2 to take now (gated on soundness + room) ──
   const primeCandidates = [...cePicks, ...pePicks]
