@@ -72,6 +72,9 @@ export interface ConvictionPick {
   gradeScore?: number;         // 0-6 aligned confirmations
   gradeReasons?: string[];     // which signals confirmed
   earlyFlow?: boolean;         // fresh order-flow ignition — early mover
+  // ── plain-English guidance (for non-traders) ──
+  plainAction?: 'BUY NOW' | 'CONSIDER' | 'WAIT' | 'SKIP' | 'WATCH';
+  plainMessage?: string;       // one clear human sentence: what to do & why
   primeScore: number;          // 0-100 actionability (best-to-take-now)
   isPrime: boolean;            // one of the top-2 to take now
   whyBest: string;             // one-line rationale when isPrime
@@ -676,6 +679,31 @@ export function runConvictionEngine(
       : gradeScore >= 3 ? 'B'
       : 'C';
 
+    // ── PLAIN-ENGLISH GUIDANCE (for someone with zero trading knowledge) ──
+    const opt = direction === 'CE' ? 'Call' : 'Put';
+    const dirWord = direction === 'CE' ? 'go UP' : 'go DOWN';
+    const who = control?.controller === 'BUYERS' ? 'Big buyers are stepping in'
+      : control?.controller === 'SELLERS' ? 'Big sellers are stepping in'
+      : 'Buyers and sellers are evenly matched';
+    const roomWord = room.score >= 60 ? 'plenty of room to move' : room.score >= 45 ? 'some room left' : 'little room left';
+    let plainAction: ConvictionPick['plainAction'];
+    let plainMessage: string;
+    if ((grade === 'A+' || grade === 'A') && entrySignal === 'ENTER_NOW' && !trapAgainst) {
+      plainAction = 'BUY NOW';
+      plainMessage = `Buy a ${opp.symbol} ${opt}. ${who} to push it ${dirWord}, with ${roomWord}. ${grade === 'A+' ? 'Very high' : 'High'} confidence — after you buy, the engine tells you exactly when to exit.`;
+    } else if (entrySignal === 'ENTER_NOW') {
+      plainAction = 'CONSIDER';
+      plainMessage = `A ${opp.symbol} ${opt} is ready, but only moderate confidence (grade ${grade}). Take a smaller position, or wait for a clearer one.`;
+    } else if (entrySignal === 'WAIT') {
+      plainAction = 'WAIT';
+      const why = room.score < 45 ? `it has already moved a lot — wait for a small ${direction === 'CE' ? 'dip' : 'bounce'} before buying` : `it is still forming — wait for it to confirm`;
+      plainMessage = `Don't buy yet. This ${opt} looks promising but ${why}.`;
+    } else {
+      plainAction = 'SKIP';
+      const why = trapAgainst ? `the option activity is going the OTHER way (trap risk)` : news.direction === 'NEGATIVE' ? `there is negative news pressure` : `the setup isn't clean`;
+      plainMessage = `Skip this one — ${why}. There will be better opportunities.`;
+    }
+
     const pick: ConvictionPick = {
       symbol: opp.symbol, sector: opp.sector ?? '', direction, rank: 0,
       technicalScore: Math.round(opp.technicalScore ?? 0),
@@ -690,6 +718,7 @@ export function runConvictionEngine(
       controlStrength: control?.strength, controlEvidence: control?.evidence?.slice(0, 3),
       trap: trapAgainst, trapNote: trapAgainst ? control?.trapNote : undefined,
       grade, gradeScore, gradeReasons, earlyFlow: earlyMover,
+      plainAction, plainMessage,
       primeScore, isPrime: false, whyBest: '',
       stability: stability.class, stabilityScore: Math.round(stability.score), trendScore: Math.round(stability.trend), consecutiveTop10: stability.consecutiveTop,
       newsMomentum: news.direction, newsBoost: news.boost, newsHeadlines: news.headlines, hasEarningsNews: news.hasEarnings,

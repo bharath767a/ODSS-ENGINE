@@ -347,6 +347,20 @@ function SimplePickCard({ pick, idx, q, rec, isTaken, onSelect, pickConfluence }
       )}
       onClick={() => rec && onSelect?.(rec)}
     >
+      {/* PLAIN-ENGLISH GUIDANCE — the one line anyone can act on */}
+      {pick.plainMessage && (
+        <div className={cn('mb-2 rounded-md px-2 py-1.5 font-sans text-[11px] leading-snug',
+          pick.plainAction === 'BUY NOW' ? 'border border-bull/40 bg-bull/15'
+            : pick.plainAction === 'CONSIDER' ? 'border border-info/30 bg-info/10'
+            : pick.plainAction === 'WAIT' ? 'border border-warn/30 bg-warn/10'
+            : 'border border-bear/30 bg-bear/10')}>
+          <span className={cn('font-black tracking-wide',
+            pick.plainAction === 'BUY NOW' ? 'text-bull' : pick.plainAction === 'CONSIDER' ? 'text-info' : pick.plainAction === 'WAIT' ? 'text-warn' : 'text-bear')}>
+            {pick.plainAction === 'BUY NOW' ? '✅ BUY NOW' : pick.plainAction === 'CONSIDER' ? '🤔 CONSIDER' : pick.plainAction === 'WAIT' ? '⏳ WAIT' : '❌ SKIP'}
+          </span>
+          <span className="ml-1 text-foreground/85">— {pick.plainMessage}</span>
+        </div>
+      )}
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className={cn('flex h-6 w-6 items-center justify-center rounded font-mono text-xs font-bold', idx === 0 ? 'bg-warn/20 text-warn' : 'bg-muted/30 text-muted-foreground')}>{idx + 1}</span>
