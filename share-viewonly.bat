@@ -29,9 +29,16 @@ if not exist "src\app" (
   exit /b 1
 )
 
+REM --- Find ngrok: repo copy, then PATH, then your original ODSS folder ---
+set "NGROK="
+if exist "%REPO%nse-bridge\ngrok.exe" set "NGROK=%REPO%nse-bridge\ngrok.exe"
+if not defined NGROK ( where ngrok >nul 2>&1 && set "NGROK=ngrok" )
+if not defined NGROK if exist "%USERPROFILE%\OneDrive\Desktop\ODSS\nse-bridge\ngrok.exe" set "NGROK=%USERPROFILE%\OneDrive\Desktop\ODSS\nse-bridge\ngrok.exe"
+
 echo ============================================================
 echo   ODSS - VIEW-ONLY SHARE  (read-only, no source, expires today)
-echo   Repo: %REPO%
+echo   Repo:  %REPO%
+echo   ngrok: %NGROK%
 echo ============================================================
 echo The Market Service must be running (start-odss.bat) for live data.
 echo.
@@ -45,11 +52,18 @@ call npx next build --webpack
 if errorlevel 1 ( echo BUILD FAILED. & pause & exit /b 1 )
 
 echo [2/3] Starting the view-only server on port 3001...
+REM Free port 3001 from any previous run so we don't hit EADDRINUSE.
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":3001 " ^| findstr LISTENING') do taskkill /F /PID %%p >nul 2>&1
 start "ODSS View-Only (3001)" cmd /k "set ODSS_SHARE=1&& set ODSS_DIST_DIR=.next-share&& set ODSS_VIEW_ONLY=1&& set NEXT_PUBLIC_ODSS_VIEW_ONLY=1&& set ODSS_DATA_DIR=%ODSS_DATA_DIR%&& set DATABASE_URL=%DATABASE_URL%&& npx next start -p 3001"
 timeout /t 10 /nobreak >nul
 
 echo [3/3] Opening the public tunnel...
-start "ODSS ngrok - SHARE THIS URL" cmd /k "ngrok http 3001"
+if not defined NGROK (
+  echo WARNING: ngrok not found. Install it, or run manually in another window:
+  echo     ngrok http 3001
+) else (
+  start "ODSS ngrok - SHARE THIS URL" cmd /k ""%NGROK%" http 3001"
+)
 
 echo.
 echo ============================================================

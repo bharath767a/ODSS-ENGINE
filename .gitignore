@@ -62,3 +62,6 @@ dhan-creds.json
 
 # npm lockfile — project uses bun (bun.lock is the source of truth)
 package-lock.json
+
+# ngrok binary (kept locally next to the bridge; not committed)
+nse-bridge/ngrok.exe
