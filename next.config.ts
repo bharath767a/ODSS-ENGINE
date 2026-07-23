@@ -9,9 +9,6 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
   // No browser source maps in production → the shared (view-only) build never
   // exposes the engine's TypeScript source.
   productionBrowserSourceMaps: false,

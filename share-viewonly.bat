@@ -26,7 +26,8 @@ echo [1/3] Building view-only production (separate build, no source maps)...
 set "ODSS_SHARE=1"
 set "ODSS_DIST_DIR=.next-share"
 set "NEXT_PUBLIC_ODSS_VIEW_ONLY=1"
-call npx next build
+REM --webpack: this project uses webpack (not Turbopack) — matches the dev server.
+call npx next build --webpack
 if errorlevel 1 ( echo BUILD FAILED. & pause & exit /b 1 )
 
 echo [2/3] Starting the view-only server on port 3001...
