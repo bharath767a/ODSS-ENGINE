@@ -85,12 +85,18 @@ log = logging.getLogger("bridge")
 class DhanClient:
     """Direct Dhan Market Data API client."""
 
-    BASE_URL = "https://api.dhan.in"
+    BASE_URL = "https://api.dhan.co"   # DhanHQ v2 REST base (NOT api.dhan.in)
+
+    # Index underlyings for the option chain (IDX_I segment security ids).
+    INDEX_IDS = {"NIFTY": 13, "BANKNIFTY": 25, "FINNIFTY": 27, "MIDCPNIFTY": 442}
 
     def __init__(self):
         self.config = load_dhan_config()
         self.security_id_map = {}  # {SYMBOL: securityId}
         self.last_config_check = 0
+        self._oc_cache = {}          # {underlying: {"ts":..., "data":...}}
+        self._expiry_cache = {}      # {"scrip:seg": {"ts":..., "expiry":...}}
+        self._last_oc_call = 0.0     # Dhan option chain limit ~1 request / 3s
 
     def reload_config(self):
         """Reload config every 60s (in case user updated token)."""
@@ -111,6 +117,7 @@ class DhanClient:
             "Content-Type": "application/json",
             "Accept": "application/json",
             "access-token": self.config.get("accessToken", ""),
+            "client-id": self.config.get("clientId", ""),   # required by DhanHQ v2
         }
 
     def load_security_ids(self):
@@ -125,21 +132,25 @@ class DhanClient:
                 log.error(f"Instrument master HTTP {r.status_code}")
                 return
 
+            # CSV columns: SEM_EXM_EXCH_ID(0), SEM_SEGMENT(1), SEM_SMST_SECURITY_ID(2),
+            # SEM_INSTRUMENT_NAME(3), SEM_EXPIRY_CODE(4), SEM_TRADING_SYMBOL(5), ...
             lines = r.text.split('\n')
             count = 0
             for line in lines:
                 parts = line.split(',')
-                if len(parts) < 3:
+                if len(parts) < 6:
                     continue
                 exchange = parts[0].strip()
-                sec_id = parts[1].strip()
-                symbol = parts[2].strip().upper()
-                # Store NSE equity symbols
-                if exchange in ('NSE', 'NSE_EQ') and symbol and sec_id:
+                segment = parts[1].strip()
+                sec_id = parts[2].strip()
+                instrument = parts[3].strip()
+                symbol = parts[5].strip().upper()
+                # NSE cash equities only (segment 'E', instrument 'EQUITY').
+                if exchange == 'NSE' and segment == 'E' and instrument == 'EQUITY' and symbol and sec_id:
                     if symbol not in self.security_id_map:
                         self.security_id_map[symbol] = sec_id
                         count += 1
-            log.info(f"Loaded {count} NSE security IDs from Dhan")
+            log.info(f"Loaded {count} NSE equity security IDs from Dhan")
         except Exception as e:
             log.error(f"Failed to load instrument master: {e}")
 
@@ -149,101 +160,138 @@ class DhanClient:
             self.load_security_ids()
         return self.security_id_map.get(symbol.upper())
 
+    def _parse_quote_node(self, symbol, node):
+        """Parse a single DhanHQ v2 marketfeed/quote node (OHLC is nested)."""
+        ltp = float(node.get("last_price", 0) or 0)
+        ohlc = node.get("ohlc", {}) or {}
+        prev_close = float(ohlc.get("close", 0) or 0) or ltp
+        open_price = float(ohlc.get("open", 0) or 0) or ltp
+        high = float(ohlc.get("high", 0) or 0) or ltp
+        low = float(ohlc.get("low", 0) or 0) or ltp
+        volume = int(node.get("volume", 0) or 0)
+        vwap = float(node.get("average_price", 0) or 0) or ltp
+        change_pct = ((ltp - prev_close) / prev_close * 100) if prev_close > 0 else 0
+        return {
+            "symbol": symbol, "ltp": ltp, "open": open_price, "high": high, "low": low,
+            "close": prev_close, "volume": volume, "vwap": vwap,
+            "changePct": change_pct, "source": "DHAN",
+        }
+
     def get_quote(self, symbol):
-        """Get real-time quote from Dhan."""
+        """Get real-time quote from Dhan (DhanHQ v2 marketfeed/quote)."""
         if not self.is_configured():
             return None
-
         sec_id = self.get_security_id(symbol)
         if not sec_id:
             log.warning(f"No security ID found for {symbol}")
             return None
-
         try:
             r = requests.post(
-                f"{self.BASE_URL}/v2/marketfeed/lite",
+                f"{self.BASE_URL}/v2/marketfeed/quote",
                 headers=self.get_headers(),
                 json={"NSE_EQ": [int(sec_id)]},
-                timeout=8
+                timeout=8,
             )
             if r.status_code == 401:
-                log.error("Dhan token expired — run dhan-login.py to refresh")
+                log.error("Dhan token invalid/expired — regenerate via dhan-login.py")
                 return None
             if r.status_code != 200:
-                log.warning(f"Dhan quote HTTP {r.status_code} for {symbol}")
+                log.warning(f"Dhan quote HTTP {r.status_code} for {symbol}: {r.text[:120]}")
                 return None
-
-            data = r.json()
-            quote_data = data.get("data", {}).get("NSE_EQ", [])
-            if not quote_data:
+            node = (r.json().get("data", {}).get("NSE_EQ", {}) or {}).get(str(sec_id))
+            if not node:
                 return None
-
-            q = quote_data[0]
-            ltp = float(q.get("last_price", 0))
-            close = float(q.get("close", ltp))
-            open_price = float(q.get("open", ltp))
-            high = float(q.get("high", ltp))
-            low = float(q.get("low", ltp))
-            volume = int(q.get("volume", 0))
-            vwap = float(q.get("avg_trade_price", ltp))
-            change_pct = ((ltp - close) / close) * 100 if close > 0 else 0
-
-            return {
-                "symbol": symbol,
-                "ltp": ltp,
-                "open": open_price,
-                "high": high,
-                "low": low,
-                "close": close,
-                "volume": volume,
-                "vwap": vwap,
-                "changePct": change_pct,
-                "source": "DHAN"
-            }
+            return self._parse_quote_node(symbol, node)
         except Exception as e:
             log.warning(f"Dhan quote failed for {symbol}: {e}")
             return None
 
+    # ---- Option-chain helpers (DhanHQ v2) ----
+    def _underlying_ref(self, underlying):
+        """Return (UnderlyingScrip, UnderlyingSeg) for an index or stock."""
+        u = underlying.upper()
+        if u in self.INDEX_IDS:
+            return self.INDEX_IDS[u], "IDX_I"
+        sec_id = self.get_security_id(u)
+        return (int(sec_id), "NSE_EQ") if sec_id else (None, None)
+
+    def _nearest_expiry(self, scrip, seg):
+        """Nearest expiry for an underlying, cached for the trading day."""
+        key = f"{scrip}:{seg}"
+        cached = self._expiry_cache.get(key)
+        if cached and time.time() - cached["ts"] < 3600:
+            return cached["expiry"]
+        try:
+            self._respect_oc_rate()
+            r = requests.post(
+                f"{self.BASE_URL}/v2/optionchain/expirylist",
+                headers=self.get_headers(),
+                json={"UnderlyingScrip": scrip, "UnderlyingSeg": seg},
+                timeout=10,
+            )
+            if r.status_code != 200:
+                log.warning(f"Dhan expirylist HTTP {r.status_code} for {scrip}: {r.text[:120]}")
+                return None
+            expiries = r.json().get("data", [])
+            if not expiries:
+                return None
+            self._expiry_cache[key] = {"ts": time.time(), "expiry": expiries[0]}
+            return expiries[0]
+        except Exception as e:
+            log.warning(f"Dhan expirylist failed for {scrip}: {e}")
+            return None
+
+    def _respect_oc_rate(self):
+        """Space option-chain calls ~3s apart (Dhan limit)."""
+        wait = 3.1 - (time.time() - self._last_oc_call)
+        if wait > 0:
+            time.sleep(wait)
+        self._last_oc_call = time.time()
+
     def get_option_chain(self, underlying):
-        """Get full option chain with OI + Greeks from Dhan."""
+        """Get full option chain with OI + Greeks from Dhan (DhanHQ v2)."""
         if not self.is_configured():
             return None
 
-        try:
-            # Determine underlying segment
-            if underlying in ('NIFTY', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY'):
-                underlying_seg = "INDEX"
-            else:
-                underlying_seg = "NSE_EQ"
+        underlying = underlying.upper()
+        # Short cache to respect Dhan's ~1 request / 3s option-chain limit.
+        cached = self._oc_cache.get(underlying)
+        if cached and time.time() - cached["ts"] < 4:
+            return cached["data"]
 
+        try:
+            scrip, seg = self._underlying_ref(underlying)
+            if scrip is None:
+                log.warning(f"No underlying scrip for {underlying}")
+                return None
+            expiry = self._nearest_expiry(scrip, seg)
+            if not expiry:
+                return None
+
+            self._respect_oc_rate()
             r = requests.post(
                 f"{self.BASE_URL}/v2/optionchain",
                 headers=self.get_headers(),
-                json={
-                    "underlyings": [{
-                        "underlying_scrip": underlying,
-                        "underlying_seg": underlying_seg
-                    }]
-                },
-                timeout=15
+                json={"UnderlyingScrip": scrip, "UnderlyingSeg": seg, "Expiry": expiry},
+                timeout=15,
             )
             if r.status_code == 401:
-                log.error("Dhan token expired — run dhan-login.py to refresh")
+                log.error("Dhan token invalid/expired — regenerate via dhan-login.py")
                 return None
             if r.status_code != 200:
-                log.warning(f"Dhan option chain HTTP {r.status_code} for {underlying}")
+                log.warning(f"Dhan option chain HTTP {r.status_code} for {underlying}: {r.text[:120]}")
                 return None
 
-            data = r.json()
-            oc_data = data.get("data", [])
-
-            if not oc_data:
+            data = r.json().get("data", {}) or {}
+            spot = float(data.get("last_price", 0) or 0)
+            oc_map = data.get("oc", {}) or {}
+            if not oc_map:
                 return None
-
-            # Get the nearest expiry option chain
-            oc = oc_data[0] if isinstance(oc_data, list) else oc_data
-            spot = float(oc.get("spot_price", 0))
-            strikes = oc.get("strike_prices", [])
+            # Normalise the {strike: {ce, pe}} map into a list the code below expects.
+            strikes = [
+                {"strike": float(k), "ce": v.get("ce", {}) or {}, "pe": v.get("pe", {}) or {}}
+                for k, v in oc_map.items()
+            ]
 
             # Calculate PCR, max pain, find max OI strikes
             total_call_oi = 0
@@ -318,9 +366,13 @@ class DhanClient:
                     "putGamma": float(pe.get("greeks", {}).get("gamma", 0)),
                     "putTheta": float(pe.get("greeks", {}).get("theta", 0)),
                     "putVega": float(pe.get("greeks", {}).get("vega", 0)),
+                    "callOIChange": int(ce.get("oi", 0) or 0) - int(ce.get("previous_oi", 0) or 0),
+                    "putOIChange": int(pe.get("oi", 0) or 0) - int(pe.get("previous_oi", 0) or 0),
                 })
 
-            return {
+            total_call_oi_chg = sum(r["callOIChange"] for r in option_rows)
+            total_put_oi_chg = sum(r["putOIChange"] for r in option_rows)
+            result = {
                 "symbol": underlying,
                 "spot": spot,
                 "atmStrike": atm_strike,
@@ -330,10 +382,14 @@ class DhanClient:
                 "maxPutOIStrike": max_put_strike,
                 "totalCallOI": total_call_oi,
                 "totalPutOI": total_put_oi,
+                "totalCallOIChange": total_call_oi_chg,
+                "totalPutOIChange": total_put_oi_chg,
                 "strikes": option_rows,
-                "expiry": oc.get("expiry", ""),
-                "source": "DHAN"
+                "expiry": expiry,
+                "source": "DHAN",
             }
+            self._oc_cache[underlying] = {"ts": time.time(), "data": result}
+            return result
         except Exception as e:
             log.warning(f"Dhan option chain failed for {underlying}: {e}")
             return None
@@ -356,47 +412,26 @@ class DhanClient:
 
         try:
             r = requests.post(
-                f"{self.BASE_URL}/v2/marketfeed/lite",
+                f"{self.BASE_URL}/v2/marketfeed/quote",
                 headers=self.get_headers(),
-                json={"NSE_EQ": sec_ids[:50]},  # Max 50 per call
-                timeout=12
+                json={"NSE_EQ": sec_ids[:1000]},
+                timeout=12,
             )
             if r.status_code != 200:
-                log.warning(f"Dhan batch quotes HTTP {r.status_code}")
+                log.warning(f"Dhan batch quotes HTTP {r.status_code}: {r.text[:120]}")
                 return {}
 
-            data = r.json()
-            quotes_data = data.get("data", {}).get("NSE_EQ", [])
-
+            nodes = r.json().get("data", {}).get("NSE_EQ", {}) or {}
             result = {}
             id_to_sym = {v: k for k, v in sym_to_id.items()}
-            for q in quotes_data:
-                sec_id = q.get("security_id")
-                sym = id_to_sym.get(sec_id)
-                if not sym:
+            for id_str, node in nodes.items():
+                try:
+                    sec_id = int(id_str)
+                except (TypeError, ValueError):
                     continue
-
-                ltp = float(q.get("last_price", 0))
-                close = float(q.get("close", ltp))
-                open_price = float(q.get("open", ltp))
-                high = float(q.get("high", ltp))
-                low = float(q.get("low", ltp))
-                volume = int(q.get("volume", 0))
-                vwap = float(q.get("avg_trade_price", ltp))
-                change_pct = ((ltp - close) / close) * 100 if close > 0 else 0
-
-                result[sym] = {
-                    "symbol": sym,
-                    "ltp": ltp,
-                    "open": open_price,
-                    "high": high,
-                    "low": low,
-                    "close": close,
-                    "volume": volume,
-                    "vwap": vwap,
-                    "changePct": change_pct,
-                    "source": "DHAN"
-                }
+                sym = id_to_sym.get(sec_id)
+                if sym:
+                    result[sym] = self._parse_quote_node(sym, node)
             return result
         except Exception as e:
             log.warning(f"Dhan batch quotes failed: {e}")

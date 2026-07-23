@@ -12,6 +12,17 @@ can't call Dhan's API directly with your session, the data flows through a small
 
 There are **three connection points**. Do them in order.
 
+> **Running everything on ONE PC (your current setup)?** Then you don't need
+> ngrok at all — the bridge runs on `localhost:8765` and the engine points
+> straight to it. `start-odss.bat` already launches the bridge for you. Skip the
+> ngrok step (2) and in step (3) use `"url": "http://localhost:8765"`.
+
+> ⚠️ **The credentials file is `nse-bridge\dhan-creds.json` — NOT
+> `dhan-creds-template.json`.** The template is only a sample. Every script and
+> the bridge read `dhan-creds.json`. If you edit the template, nothing happens.
+> (Copy the template to `dhan-creds.json` once, then keep the token updated in
+> `dhan-creds.json`.)
+
 ---
 
 ## 1. Connect Dhan → Bridge  (on your India laptop)
@@ -80,8 +91,8 @@ effect within about half a minute — no engine restart needed.
 ## THE DAILY TOKEN (the thing that expires)
 
 - **What expires:** the Dhan **access token** (roughly every 24h).
-- **Where it lives:** `nse-bridge\dhan-creds.json` → the `"accessToken"` field, **on the laptop**.
-- **How to refresh:** run `python dhan-login.py` in `nse-bridge` (it rewrites the file), or paste a fresh token into that field.
+- **Where it lives:** `nse-bridge\dhan-creds.json` → the `"accessToken"` field. **This exact file — not the `-template` one.**
+- **How to refresh:** paste a fresh token into `"accessToken"` in `dhan-creds.json`, or run `python dhan-login.py` in `nse-bridge` (it opens the Dhan login and rewrites the file).
 - **No restart needed:** the bridge reloads it within 60 seconds.
 
 ### Verify it actually worked (this is important)

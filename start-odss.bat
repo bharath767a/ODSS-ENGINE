@@ -26,11 +26,16 @@ echo   Repo:     %REPO%
 echo   Data dir: %ODSS_DATA_DIR%
 echo ============================================================
 echo.
-echo Starting Market Service (port 3002) and Web (port 3000)...
-echo (Bridge/Dhan must be running on your laptop for real option data.)
+echo Starting Dhan Bridge (8765), Market Service (3002), Web (3000)...
+echo NOTE: put today's fresh Dhan token in nse-bridge\dhan-creds.json (NOT the template).
 echo.
 
-REM Child windows inherit the env vars set above.
+REM 1) Dhan bridge (real quotes + option chains + greeks). Reads dhan-creds.json.
+start "ODSS Dhan Bridge (8765)" /D "%REPO%nse-bridge" cmd /k python bridge_server_v4.py
+echo Waiting ~12s for the bridge to load Dhan security IDs...
+timeout /t 12 /nobreak >nul
+
+REM 2) Engine services (child windows inherit the env vars set above).
 start "ODSS Market Service (3002)" /D "%REPO%mini-services\odss-market" cmd /k bun index.ts
 start "ODSS Web (3000)" /D "%REPO%" cmd /k npx next dev -p 3000 --webpack
 
