@@ -78,12 +78,15 @@ export function runControlEngine(chain: OptionChain, underlyingChangePct = 0): C
   let callWriteMag = 0, putWriteMag = 0, callCoverMag = 0, putUnwindMag = 0, callBuyMag = 0, putBuyMag = 0;
   // delta-weighted directional flow (fresh exposure being added)
   let deltaFlow = 0;
+  // near-money freshness — how much of the standing OI is brand-new today + turnover
+  let nearOI = 0, nearAbsOIChg = 0, nearVol = 0;
 
   const strikeNotes: { dist: number; mag: number; text: string; sign: number }[] = [];
 
   const proximity = (strike: number) => Math.exp(-((strike - spot) ** 2) / (2 * sigma * sigma));
 
   const consider = (r: OptionRow, isCall: boolean) => {
+    if (proximity(r.strike) > 0.5) { nearOI += r.oi; nearAbsOIChg += Math.abs(r.oiChange); nearVol += r.volume; }
     const f = classifyFlow(r.oiChange, r.ltpChange, r.oi);
     if (f === 'FLAT') return;
     const w = proximity(r.strike) * (0.5 + 0.5 * Math.min(1, Math.abs(r.delta)));
@@ -174,10 +177,19 @@ export function runControlEngine(chain: OptionChain, underlyingChangePct = 0): C
   evidence.push(`Support ${supportStrike} · Resistance ${resistanceStrike} · Max pain ${maxPain} · ${gammaRegime.toLowerCase()}`);
   void headline;
 
+  // FLOW INTENSITY — how much of the near-money OI is FRESH today + how much it's
+  // turning over. A big, fresh, one-sided surge = smart money moving EARLY, before
+  // price fully confirms. This is what lets us flag a mover near its start.
+  const flowIntensity = nearOI > 0
+    ? Math.round(clamp((nearAbsOIChg / nearOI) * 220 + (nearVol / nearOI) * 55, 0, 100))
+    : 0;
+  const earlyFlow = flowIntensity >= 55 && strength >= 55 && Math.abs(controlScore) >= 30;
+  if (earlyFlow) evidence.unshift(`🔥 Early flow — fresh ${controlScore > 0 ? 'bullish' : 'bearish'} positioning (intensity ${flowIntensity})`);
+
   return {
     controller, controlScore, strength, bias,
     evidence: evidence.slice(0, 6), trap, trapNote,
     supportStrike, resistanceStrike, maxPain, pcr, ivSkew,
-    pinStrike, gammaRegime, timestamp: Date.now(),
+    pinStrike, gammaRegime, flowIntensity, earlyFlow, timestamp: Date.now(),
   };
 }

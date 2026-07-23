@@ -123,6 +123,8 @@ export interface ControlResult {
   ivSkew: number;              // put IV - call IV (fear gauge)
   pinStrike: number;           // gamma/OI pin (magnet) strike
   gammaRegime: 'PINNED' | 'TRENDING' | 'NEUTRAL';
+  flowIntensity: number;       // 0-100 how FRESH/aggressive near-money positioning is
+  earlyFlow: boolean;          // strong + fresh directional flow → early-mover ignition
   timestamp: number;
 }
 

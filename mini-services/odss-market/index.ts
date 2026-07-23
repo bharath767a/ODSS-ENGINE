@@ -329,9 +329,17 @@ function analyzeTakenTrade(t: TakenTrade): TakenTrade {
   if (chain) { try { const c = runControlEngine(chain, quote?.changePct ?? 0); controller = c.controller; controlStrength = c.strength; controlEvidence = c.evidence?.slice(0, 2); } catch {} }
 
   const oc = getOCConfluence(t.symbol);
+  // The clearest exit signal is an ORDER-FLOW FLIP: the other side just took
+  // control of the chain. That's your "get out" — stated plainly.
+  const controlAgainst = !!controller
+    && ((t.direction === 'PE' && controller === 'BUYERS') || (t.direction === 'CE' && controller === 'SELLERS'))
+    && (controlStrength ?? 0) >= 45;
   let recommendation: TakenTrade['recommendation'] = 'HOLD';
-  let recReason = 'On track — hold';
-  if (oc?.exitSignal === 'EXIT') { recommendation = 'CLOSE'; recReason = oc.headline; }
+  let recReason = controller && controller !== 'BALANCED'
+    ? `${controller} in control (${controlStrength}%) — with you, hold`
+    : 'On track — hold';
+  if (controlAgainst) { recommendation = 'CLOSE'; recReason = `${controller} just took control (${controlStrength}%) — flow flipped against your ${t.direction}. EXIT NOW.`; }
+  else if (oc?.exitSignal === 'EXIT') { recommendation = 'CLOSE'; recReason = oc.headline; }
   else if (pnlPct <= -50) { recommendation = 'CLOSE'; recReason = `Premium down ${pnlPct.toFixed(0)}% — cut the loss`; }
   else if (pnlPct >= 40) { recommendation = 'REDUCE'; recReason = `Up ${pnlPct.toFixed(0)}% — book partial, trail the rest`; }
   else if (oc?.exitSignal === 'REDUCE') { recommendation = 'REDUCE'; recReason = oc.headline; }

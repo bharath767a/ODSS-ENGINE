@@ -354,6 +354,14 @@ function SimplePickCard({ pick, idx, q, rec, isTaken, onSelect, pickConfluence }
             <div className="flex items-center gap-1.5">
               <span className="font-sans text-sm font-bold tracking-wide text-foreground">{pick.symbol}</span>
               <DirectionBadge direction={pick.direction} />
+              {pick.grade && (
+                <span
+                  className={cn('rounded px-1.5 py-0.5 font-mono text-[10px] font-black',
+                    pick.grade === 'A+' ? 'bg-bull/30 text-bull ring-1 ring-bull/40' : pick.grade === 'A' ? 'bg-bull/20 text-bull' : pick.grade === 'B' ? 'bg-warn/20 text-warn' : 'bg-muted/30 text-muted-foreground')}
+                  title={`${pick.gradeScore ?? 0}/6 signals aligned: ${(pick.gradeReasons ?? []).join(', ')}`}
+                >{pick.grade}</span>
+              )}
+              {pick.earlyFlow && <span className="rounded bg-orange-500/20 px-1 py-0.5 font-mono text-[9px] font-bold text-orange-600" title="Fresh, aggressive order-flow ignition — caught early">🔥 EARLY</span>}
               {pick.isPrime && <span className="flex items-center gap-0.5 rounded bg-warn/25 px-1 py-0.5 font-mono text-[9px] font-bold text-warn" title={pick.whyBest}><Trophy className="h-2.5 w-2.5" />PRIME</span>}
               {pick.locked && <span className="flex items-center gap-0.5 rounded bg-ai/20 px-1 py-0.5 font-mono text-[9px] font-bold text-ai"><Lock className="h-2.5 w-2.5" />{pick.lockMinutesLeft}m</span>}
               {isTaken && <span className="rounded bg-bull/20 px-1 py-0.5 font-mono text-[9px] font-bold text-bull"><Check className="inline h-2 w-2" /> TAKEN</span>}

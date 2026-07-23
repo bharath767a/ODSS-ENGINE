@@ -67,6 +67,10 @@ export interface ConvictionPick {
   controlEvidence?: string[];  // top order-flow reasons
   trap?: boolean;              // chain contradicts this side (trap risk)
   trapNote?: string;
+  grade?: string;              // A+ / A / B / C — how many signals align
+  gradeScore?: number;         // 0-6 aligned confirmations
+  gradeReasons?: string[];     // which signals confirmed
+  earlyFlow?: boolean;         // fresh order-flow ignition — early mover
   primeScore: number;          // 0-100 actionability (best-to-take-now)
   isPrime: boolean;            // one of the top-2 to take now
   whyBest: string;             // one-line rationale when isPrime
@@ -390,7 +394,11 @@ function calculateNewsMomentum(symbol: string, sector: string) {
   try {
     const recent = getRecentArchived(12);
     if (!recent || recent.length === 0) return { direction: 'NEUTRAL' as const, boost: 0, headlines: [] as string[], hasEarnings: false };
-    const relevant = recent.filter((item: any) => item.entities?.stocks?.includes(symbol) || item.entities?.sectors?.includes(sector));
+    // STOCK-SPECIFIC news only drives sentiment AND is the only thing we display
+    // as the pick's headline. Sector news is far too noisy to pin on one stock
+    // (it caused unrelated headlines to show on the wrong ticker).
+    const stockNews = recent.filter((item: any) => item.entities?.stocks?.includes(symbol));
+    const relevant = stockNews;
     if (relevant.length === 0) return { direction: 'NEUTRAL' as const, boost: 0, headlines: [] as string[], hasEarnings: false };
     const positive = relevant.filter((r: any) => r.sentiment === 'POSITIVE').length;
     const negative = relevant.filter((r: any) => r.sentiment === 'NEGATIVE').length;
@@ -412,7 +420,10 @@ function calculateEntryZone(price: number, direction: Direction) {
   return { low: price * 0.997, high: price * 1.003, stopLoss: direction === 'CE' ? price * 0.985 : price * 1.015, riskReward: 2 };
 }
 
-function detectNewsShocks(liveQuotes: Record<string, { ltp: number; changePct: number }>): any[] {
+function detectNewsShocks(
+  liveQuotes: Record<string, { ltp: number; changePct: number }>,
+  recommendations: Map<string, Recommendation>,
+): any[] {
   try {
     const recent = getRecentArchived(1);
     if (!recent || recent.length === 0) return [];
@@ -426,11 +437,34 @@ function detectNewsShocks(liveQuotes: Record<string, { ltp: number; changePct: n
       for (const symbol of news.entities?.stocks ?? []) {
         const q = liveQuotes[symbol]; if (!q) continue;
         const ivCaution = Math.abs(q.changePct) > 4;
+        // CROSS-VERIFY the bad news against real order flow + price. Bad news is a
+        // clean PE only if SELLERS control the chain AND the stock is actually
+        // falling. If buyers are defending / it's recovering, the news is likely
+        // already priced in (e.g. gap-down then bounce) — flag, don't scream PE.
+        const control = recommendations.get(symbol)?.control;
+        const cs = control?.controlScore ?? 0;
+        const buyersDefending = cs > 15 || q.changePct > 0.3;
         let conv = 65; if (age < 10) conv += 10; else if (age < 20) conv += 5; if (!ivCaution) conv += 8;
-        shocks.push({ symbol, sector: sector || 'GENERAL', trigger: news.title, age, conviction: conv, ivCaution, ivReason: ivCaution ? `Stock moved ${Math.abs(q.changePct).toFixed(1)}% — IV elevated` : '', target: q.ltp * 0.98, price: q.ltp });
+        let verified = true; let controlNote = '';
+        if (buyersDefending) {
+          verified = false;
+          conv = Math.max(35, conv - 28);
+          controlNote = cs > 15
+            ? `⚠ Buyers control the chain (${control?.strength ?? 0}%) — news likely PRICED IN, reversal risk`
+            : `⚠ Stock ${q.changePct >= 0 ? `up ${q.changePct.toFixed(1)}%` : 'not falling'} despite the news — likely priced in`;
+        } else if (cs < -15) {
+          conv += 6; controlNote = `Order flow confirms — sellers in control (${control?.strength ?? 0}%)`;
+        }
+        shocks.push({
+          symbol, sector: sector || 'GENERAL', trigger: news.title, age,
+          conviction: conv, verified, controlNote,
+          ivCaution, ivReason: ivCaution ? `Stock moved ${Math.abs(q.changePct).toFixed(1)}% — IV elevated` : '',
+          target: q.ltp * 0.98, price: q.ltp,
+        });
       }
     }
-    return shocks.slice(0, 5);
+    // Verified (flow-confirmed) shocks first.
+    return shocks.sort((a, b) => (b.verified ? 1 : 0) - (a.verified ? 1 : 0) || b.conviction - a.conviction).slice(0, 5);
   } catch { return []; }
 }
 
@@ -472,7 +506,11 @@ function processSide(
   for (const sym of candidatesRanked) {
     if (side.set.length >= MAX_PER_SIDE) break;
     if (side.set.includes(sym)) continue;
-    if ((side.candidacy[sym] ?? 0) >= PROMO_SCANS && emaOf(sym) >= PROMO_SCORE) {
+    const cand = side.candidacy[sym] ?? 0;
+    const ema = emaOf(sym);
+    // Normal promote, OR express-promote a genuinely strong fresh signal (high
+    // EMA) after just 2 scans so early movers aren't held back by the 4-scan gate.
+    if ((cand >= PROMO_SCANS && ema >= PROMO_SCORE) || (cand >= 2 && ema >= 68)) {
       side.set.push(sym);
       side.dwell[sym] = 1;
       side.candidacy[sym] = 0;
@@ -566,10 +604,15 @@ export function runConvictionEngine(
     const controlContradicts = !!control && controlFit < 40;
     const trapAgainst = !!control?.trap && controlContradicts;
 
+    // EARLY MOVER: fresh, aggressive, one-sided order flow on OUR side while the
+    // move still has room = smart money igniting before price confirms. Boost it
+    // so the engine surfaces the mover near the START, not after it's 60% done.
+    const earlyMover = !!control?.earlyFlow && controlFit >= 60 && room.score >= 55;
+
     // Composite conviction — ROOM-TO-TARGET is now a top driver (22%) so the
     // stocks that surface are the ones with the move still ahead of them, not
     // the ones that already ran. Technical + real order-flow control follow.
-    const conviction = Math.round(
+    let conviction = Math.round(
       0.24 * th +
       0.14 * ocH +
       0.16 * controlFit +
@@ -578,6 +621,7 @@ export function runConvictionEngine(
       0.22 * room.score +
       0.12 * stability.score,
     );
+    if (earlyMover) conviction = Math.min(100, conviction + 9);
 
     // Record smoothed composite BEFORE building the pick (drives promote/demote).
     recordScore(opp.symbol, conviction, topSymbols.has(opp.symbol));
@@ -611,6 +655,24 @@ export function runConvictionEngine(
       0.24 * th + 0.16 * ocH + 0.18 * controlFit + 0.12 * room.score + 0.10 * fundFit + 0.10 * confidence + 0.10 * stability.score,
     );
 
+    // ── CONFIDENCE GRADE — how many INDEPENDENT signals agree (take A+/A only) ──
+    const confirmations: Array<[boolean, string]> = [
+      [th >= 62, 'technical'],
+      [controlFit >= 58, 'order-flow'],
+      [room.score >= 52, 'room-to-target'],
+      [ocH >= 56, 'option-chain'],
+      [fundFit >= 55, 'fundamentals'],
+      [news.direction !== 'NEGATIVE', 'no news headwind'],
+    ];
+    const gradeReasons = confirmations.filter(c => c[0]).map(c => c[1]);
+    const gradeScore = gradeReasons.length;
+    const strongControl = controlFit >= 65 && !controlContradicts;
+    const grade = (gradeScore >= 5 && strongControl && room.score >= 55) ? 'A+'
+      : gradeScore >= 5 ? 'A'
+      : gradeScore >= 4 ? (strongControl ? 'A' : 'B')
+      : gradeScore >= 3 ? 'B'
+      : 'C';
+
     const pick: ConvictionPick = {
       symbol: opp.symbol, sector: opp.sector ?? '', direction, rank: 0,
       technicalScore: Math.round(opp.technicalScore ?? 0),
@@ -624,6 +686,7 @@ export function runConvictionEngine(
       controller: control?.controller, controlScore: control?.controlScore,
       controlStrength: control?.strength, controlEvidence: control?.evidence?.slice(0, 3),
       trap: trapAgainst, trapNote: trapAgainst ? control?.trapNote : undefined,
+      grade, gradeScore, gradeReasons, earlyFlow: earlyMover,
       primeScore, isPrime: false, whyBest: '',
       stability: stability.class, stabilityScore: Math.round(stability.score), trendScore: Math.round(stability.trend), consecutiveTop10: stability.consecutiveTop,
       newsMomentum: news.direction, newsBoost: news.boost, newsHeadlines: news.headlines, hasEarningsNews: news.hasEarnings,
@@ -705,17 +768,22 @@ export function runConvictionEngine(
   const watchlistDisplayed = watchlist.slice(0, WATCHLIST_MAX);
 
   // ── Step 7: news shocks (unchanged) ──
-  const shocks = detectNewsShocks(liveQuotes);
+  const shocks = detectNewsShocks(liveQuotes, recommendations);
   const newsShockPicks: ConvictionPick[] = shocks.map((sh, idx) => {
     const zone = calculateEntryZone(sh.price, 'PE');
+    // Only ENTER when the news is flow-VERIFIED (sellers control + falling) and IV
+    // isn't already blown out; otherwise WAIT and show why (priced-in / reversal).
+    const entrySignal: EntrySignal = (sh.verified && !sh.ivCaution) ? 'ENTER_NOW' : 'WAIT';
+    const headlines = sh.controlNote ? [sh.trigger, sh.controlNote] : [sh.trigger];
     return {
       symbol: sh.symbol, sector: sh.sector, direction: 'PE' as Direction, rank: idx + 1,
       technicalScore: 50, optionChainScore: 50, convictionScore: sh.conviction, originalScore: 50, confidence: sh.conviction,
       technicalHealth: 50, roomScore: 55, roomNotes: ['News-driven move'], fundamentalScore: 50, fundamentalRating: 'N/A',
+      controller: sh.verified ? 'SELLERS' : undefined,
       primeScore: sh.conviction, isPrime: false, whyBest: '',
       stability: 'VOLATILE' as StabilityClass, stabilityScore: 30, trendScore: -10, consecutiveTop10: 99,
-      newsMomentum: 'NEGATIVE' as const, newsBoost: -10, newsHeadlines: [sh.trigger], hasEarningsNews: false,
-      entrySignal: (sh.ivCaution ? 'WAIT' : 'ENTER_NOW') as EntrySignal, entryZoneLow: zone.low, entryZoneHigh: zone.high,
+      newsMomentum: 'NEGATIVE' as const, newsBoost: -10, newsHeadlines: headlines, hasEarningsNews: false,
+      entrySignal, entrySignalReason: sh.verified ? 'flow-confirmed news shock' : sh.controlNote, entryZoneLow: zone.low, entryZoneHigh: zone.high,
       currentPrice: sh.price, stopLoss: zone.stopLoss, riskRewardRatio: zone.riskReward,
       locked: false, lockExpiresAt: null, lockMinutesLeft: 0, isNewsShock: true,
       shockTrigger: sh.trigger, shockAgeMinutes: sh.age, shockSector: sh.sector, ivCaution: sh.ivCaution, ivCautionReason: sh.ivReason, shockTargetPrice: sh.target,
