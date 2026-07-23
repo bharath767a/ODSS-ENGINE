@@ -30,6 +30,9 @@ import { fetchAndInjectOptionChains } from '../../src/lib/odss/data-providers/op
 import { updateOCConfluence, getAllOCConfluence, getOCConfluence } from '../../src/lib/odss/engines/oc-confluence';
 import { listTaken, assignStrike, type TakenTrade } from '../../src/lib/odss/taken-trades';
 import { runControlEngine } from '../../src/lib/odss/engines/oc-control';
+import { mapBridgeChain } from '../../src/lib/odss/data-providers/option-chain-feed';
+import { buildEODRecord, buildEODReport, saveEODReport, loadEODReport } from '../../src/lib/odss/engines/eod-positioning';
+import { STOCKS } from '../../src/lib/odss/universe';
 import { recordNewsShocks } from '../../src/lib/odss/news/shocks-store';
 import { getMarketSession, shouldEngineBeActive, shouldPollRealData } from '../../src/lib/odss/market-session';
 import { dataPath, ensureDataDir } from '../../src/lib/odss/data-dir';
@@ -268,6 +271,64 @@ async function fetchOptionChainsAndConfluence() {
 setInterval(fetchOptionChainsAndConfluence, OC_INTERVAL_MS);
 setTimeout(fetchOptionChainsAndConfluence, 6000);
 console.log('[odss-market] Option-chain + delta/OI confluence loop started (8s interval)');
+
+// ============================================================
+// END-OF-DAY POSITIONING SCAN — tomorrow's bullish/bearish watchlist
+// ============================================================
+// After close, read the whole F&O universe's option chains once and rank by the
+// day's OI positioning (who's in control) → a plan for tomorrow. Runs once/day
+// automatically post-close, or on demand via the 'eod:run' socket event.
+let eodRunning = false;
+let eodDoneDate = '';
+function istDayKey(): string { const ist = new Date(Date.now() + 5.5 * 3600 * 1000); return `${ist.getUTCFullYear()}-${ist.getUTCMonth() + 1}-${ist.getUTCDate()}`; }
+
+async function runEODScan(reason: string, limit = 999): Promise<any> {
+  if (eodRunning) return (getStore() as any).eodReport ?? loadEODReport();
+  const router = getDataRouter();
+  const bridge: any = router.getProvider('BRIDGE' as any);
+  if (!bridge || !bridge.isConfigured() || typeof bridge.getRawOptionChain !== 'function') {
+    console.warn('[odss-market] EOD scan skipped — bridge/Dhan not available');
+    return null;
+  }
+  eodRunning = true;
+  console.log(`[odss-market] EOD positioning scan starting (${reason})...`);
+  try {
+    const records: any[] = [];
+    const targets = STOCKS.slice(0, limit);
+    for (const meta of targets) {
+      try {
+        const raw = await bridge.getRawOptionChain(meta.symbol);
+        if (!raw) continue;
+        const chain = mapBridgeChain(meta.symbol, raw);
+        if (!chain) continue;
+        const rec = buildEODRecord(meta.symbol, meta.sector, chain);
+        if (rec) records.push(rec);
+      } catch { /* skip symbol */ }
+    }
+    const report = buildEODReport(records, istDayKey());
+    saveEODReport(report);
+    (getStore() as any).eodReport = report;
+    io.emit('eod:report', report);
+    eodDoneDate = istDayKey();
+    console.log(`[odss-market] EOD scan done: ${records.length} stocks — ${report.bullish.length} bullish / ${report.bearish.length} bearish`);
+    return report;
+  } catch (e) {
+    console.warn('[odss-market] EOD scan error:', (e as Error).message);
+    return null;
+  } finally { eodRunning = false; }
+}
+
+// Auto-run once per day, ~5 min after close.
+setInterval(() => {
+  try {
+    const session = getMarketSession();
+    if (session.isOpen || session.isPreOpen) return;   // only after close
+    if (eodDoneDate === istDayKey()) return;            // already done today
+    if (!session.isPostClose) return;                    // wait until actually post-close
+    runEODScan('auto post-close');
+  } catch { /* ignore */ }
+}, 60_000);
+console.log('[odss-market] EOD positioning scanner armed (auto after close)');
 
 // Blend option-chain/delta confluence into picks + active trade for entry/exit timing.
 function enrichWithOCConfluence(store: any): void {
@@ -590,6 +651,18 @@ io.on('connection', (socket) => {
   socket.on('focus', (symbol: string) => {
     focusedSymbol = symbol;
     socket.emit('focused', { symbol });
+  });
+
+  // Run the EOD positioning scan on demand (full universe, or a small limit for a quick preview).
+  socket.on('eod:run', async (payload: any, ack?: (res: any) => void) => {
+    const cb = typeof payload === 'function' ? payload : ack;
+    const limit = (payload && typeof payload === 'object' && Number(payload.limit)) || 999;
+    try {
+      const report = await runEODScan('manual', limit);
+      if (cb) cb({ ok: true, report });
+    } catch (e: any) {
+      if (cb) cb({ ok: false, error: e.message });
+    }
   });
 
   socket.on('manual:scan', async () => {

@@ -36,6 +36,7 @@ import { NewsPopup } from '@/components/odss/alerts/news-popup';
 import { NewsShockers } from '@/components/odss/dashboard/news-shockers';
 import { TakenPositions } from '@/components/odss/dashboard/taken-positions';
 import { VIEW_ONLY } from '@/lib/view-only';
+import { EODPositioning } from '@/components/odss/dashboard/eod-positioning';
 import {
   Activity,
   LayoutDashboard,
@@ -277,6 +278,7 @@ function ODSSDashboard() {
 
           {/* OPPORTUNITIES */}
           <TabsContent value="opportunities" className="space-y-3">
+            <EODPositioning />
             <div className="grid gap-3 lg:grid-cols-3">
               <div className="space-y-3 lg:col-span-2">
                 <OpportunityTable onSelect={handleSelect} />
@@ -292,6 +294,7 @@ function ODSSDashboard() {
 
           {/* MARKET BRIEF */}
           <TabsContent value="brief" className="space-y-3">
+            <EODPositioning />
             <MarketBriefPanel />
           </TabsContent>
 

@@ -229,6 +229,7 @@ export function useODSS(): ODSSState & {
   listSessions: () => Promise<{ ok: boolean; sessions?: any[]; error?: string }>;
   validateSession: (sessionId: string) => Promise<{ ok: boolean; report?: any; error?: string }>;
   closeTaken: (idOrSymbol: { id?: string; symbol?: string; direction?: string }, reason?: string) => Promise<any>;
+  runEOD: (limit?: number) => Promise<any>;
 } {
   const [state, setState] = useState<ODSSState>(currentState);
 
@@ -244,6 +245,13 @@ export function useODSS(): ODSSState & {
     return () => {
       listeners.delete(setState);
     };
+  }, []);
+
+  const runEOD = useCallback((limit?: number) => {
+    return new Promise<any>((resolve) => {
+      if (!socket) return resolve({ ok: false, error: 'Not connected' });
+      socket.emit('eod:run', { limit }, (res: any) => resolve(res ?? { ok: false, error: 'No response' }));
+    });
   }, []);
 
   const closeTaken = useCallback((idOrSymbol: { id?: string; symbol?: string; direction?: string }, reason?: string) => {
@@ -322,5 +330,5 @@ export function useODSS(): ODSSState & {
     });
   }, []);
 
-  return { ...state, enterTrade, exitTrade, focusSymbol, resetSimulator, manualScan, startRecording, stopRecording, listSessions, validateSession, closeTaken };
+  return { ...state, enterTrade, exitTrade, focusSymbol, resetSimulator, manualScan, startRecording, stopRecording, listSessions, validateSession, closeTaken, runEOD };
 }
