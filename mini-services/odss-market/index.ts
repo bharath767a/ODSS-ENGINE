@@ -239,15 +239,20 @@ async function fetchOptionChainsAndConfluence() {
     for (const t of listTaken('ACTIVE')) dirBySym.set(t.symbol, t.direction);
     for (const idx of OC_INDEX_SYMBOLS) if (!dirBySym.has(idx)) dirBySym.set(idx, 'CE');
 
-    const symbols = Array.from(dirBySym.keys()).slice(0, 12); // cap for Dhan rate limits
+    // Indices FIRST so the benchmark cards are never starved by the rate limit,
+    // then the picks. Cap the set for Dhan's option-chain limit.
+    const pickSyms = Array.from(dirBySym.keys()).filter(s => !OC_INDEX_SYMBOLS.includes(s));
+    const symbols = [...OC_INDEX_SYMBOLS.filter(i => dirBySym.has(i)), ...pickSyms].slice(0, 12);
     const chains = await fetchAndInjectOptionChains(bridge, symbols);
     for (const [sym, chain] of chains) {
       try { updateOCConfluence(sym, chain, dirBySym.get(sym) ?? 'CE'); } catch {}
       try { archiveOptionChain(sym, chain); } catch {}
     }
     (store as any).ocConfluence = getAllOCConfluence();
-    // Index control read (direction-agnostic) for the NIFTY/BANKNIFTY benchmark cards.
-    const idxControl: Record<string, any> = {};
+    // Index control read (direction-agnostic) for the NIFTY/BANKNIFTY benchmark
+    // cards. PERSIST across cycles — a one-off 429 on an index must not blank the
+    // card; we keep the last good read until a fresh chain replaces it.
+    const idxControl: Record<string, any> = (store as any).indexControl || {};
     for (const idx of OC_INDEX_SYMBOLS) {
       const chain = chains.get(idx);
       if (chain) { try { idxControl[idx] = runControlEngine(chain, getQuote(idx)?.changePct ?? 0); } catch {} }

@@ -243,7 +243,7 @@ class DhanClient:
 
     def _respect_oc_rate(self):
         """Space option-chain calls ~3s apart (Dhan limit)."""
-        wait = 3.1 - (time.time() - self._last_oc_call)
+        wait = 3.5 - (time.time() - self._last_oc_call)
         if wait > 0:
             time.sleep(wait)
         self._last_oc_call = time.time()
