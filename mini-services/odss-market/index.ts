@@ -324,6 +324,10 @@ function analyzeTakenTrade(t: TakenTrade): TakenTrade {
   const pnl = currentPremium - t.entryPremium;
   const pnlPct = t.entryPremium > 0 ? (pnl / t.entryPremium) * 100 : 0;
 
+  // Who's in control on this position's chain (real order flow).
+  let controller: string | undefined, controlStrength: number | undefined, controlEvidence: string[] | undefined;
+  if (chain) { try { const c = runControlEngine(chain, quote?.changePct ?? 0); controller = c.controller; controlStrength = c.strength; controlEvidence = c.evidence?.slice(0, 2); } catch {} }
+
   const oc = getOCConfluence(t.symbol);
   let recommendation: TakenTrade['recommendation'] = 'HOLD';
   let recReason = 'On track — hold';
@@ -339,8 +343,9 @@ function analyzeTakenTrade(t: TakenTrade): TakenTrade {
     pnl: +pnl.toFixed(2), pnlPct: +pnlPct.toFixed(1),
     delta, theta, iv, gamma,
     ocScore: oc?.ocScore, ocExitSignal: oc?.exitSignal, oiAction: oc?.oiAction, ocHeadline: oc?.headline,
+    controller, controlStrength, controlEvidence,
     recommendation, recReason, updatedAt: Date.now(),
-  };
+  } as any;
 }
 
 function trackTakenTrades() {
@@ -484,6 +489,7 @@ setInterval(async () => {
 
     // Write full state to shared file so the web server's API routes can read it
     try {
+      const niftyQ = getQuote('NIFTY'); const bnQ = getQuote('BANKNIFTY');
       const stateData = {
         timestamp: Date.now(),
         market: store.market,
@@ -493,6 +499,12 @@ setInterval(async () => {
         conviction: store.conviction,
         activeTrade: store.activeTrade,
         topRecommendations: Array.from(store.recommendations.values()).slice(0, 10),
+        // Extra fields so REMOTE (HTTP-polling) spectators get live prices + positions.
+        nifty: niftyQ ? { ltp: niftyQ.ltp, changePct: niftyQ.changePct, vwap: niftyQ.vwap, open: niftyQ.open, high: niftyQ.high, low: niftyQ.low } : null,
+        bankNifty: bnQ ? { ltp: bnQ.ltp, changePct: bnQ.changePct, vwap: bnQ.vwap } : null,
+        vix: getIndiaVix(),
+        liveQuotes: getAllQuotes().slice(0, 30).map(q => ({ symbol: q.symbol, ltp: q.ltp, changePct: q.changePct, vwap: q.vwap, volume: q.volume, sector: q.sector })),
+        takenTrades: listTaken('ACTIVE').map(analyzeTakenTrade),
         smartMoney: (store as any).smartMoney || null,
         squeezes: (store as any).squeezes || [],
         ocConfluence,

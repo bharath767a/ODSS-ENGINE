@@ -35,6 +35,7 @@ import { NewsAlerts } from '@/components/odss/alerts/news-alerts';
 import { NewsPopup } from '@/components/odss/alerts/news-popup';
 import { NewsShockers } from '@/components/odss/dashboard/news-shockers';
 import { TakenPositions } from '@/components/odss/dashboard/taken-positions';
+import { VIEW_ONLY } from '@/lib/view-only';
 import {
   Activity,
   LayoutDashboard,
@@ -192,24 +193,32 @@ function ODSSDashboard() {
           </div>
 
           <div className="flex items-center gap-1.5">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={manualScan}
-              title="Trigger manual scan"
-              className="h-8 border-purple-200 bg-white/70 font-mono text-[11px] text-muted-foreground hover:bg-purple-50 hover:text-foreground"
-            >
-              <RefreshCw className="mr-1 h-3 w-3" /> SCAN
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleReset}
-              title="Reset simulator"
-              className="h-8 border-purple-200 bg-white/70 font-mono text-[11px] text-muted-foreground hover:bg-purple-50 hover:text-foreground"
-            >
-              <Zap className="mr-1 h-3 w-3" /> RESET
-            </Button>
+            {VIEW_ONLY ? (
+              <span className="flex items-center gap-1 rounded border border-info/40 bg-info/10 px-2 py-1 font-mono text-[10px] font-bold tracking-widest text-info">
+                👁 VIEW ONLY · LIVE
+              </span>
+            ) : (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={manualScan}
+                  title="Trigger manual scan"
+                  className="h-8 border-purple-200 bg-white/70 font-mono text-[11px] text-muted-foreground hover:bg-purple-50 hover:text-foreground"
+                >
+                  <RefreshCw className="mr-1 h-3 w-3" /> SCAN
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleReset}
+                  title="Reset simulator"
+                  className="h-8 border-purple-200 bg-white/70 font-mono text-[11px] text-muted-foreground hover:bg-purple-50 hover:text-foreground"
+                >
+                  <Zap className="mr-1 h-3 w-3" /> RESET
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </header>
@@ -233,8 +242,8 @@ function ODSSDashboard() {
             <TerminalTabsTrigger value="journal" icon={<BookOpen className="h-3.5 w-3.5" />} label="Journal" />
             <TerminalTabsTrigger value="analytics" icon={<BarChart3 className="h-3.5 w-3.5" />} label="Analytics" />
             <TerminalTabsTrigger value="validation" icon={<FlaskConical className="h-3.5 w-3.5" />} label="Validation" />
-            <TerminalTabsTrigger value="credentials" icon={<KeyRound className="h-3.5 w-3.5" />} label="Data Sources" />
-            <TerminalTabsTrigger value="config" icon={<Settings className="h-3.5 w-3.5" />} label="Config" />
+            {!VIEW_ONLY && <TerminalTabsTrigger value="credentials" icon={<KeyRound className="h-3.5 w-3.5" />} label="Data Sources" />}
+            {!VIEW_ONLY && <TerminalTabsTrigger value="config" icon={<Settings className="h-3.5 w-3.5" />} label="Config" />}
           </TabsList>
 
           <div className="mb-3">

@@ -10,6 +10,7 @@ import { ConfluenceCard } from './confluence-card';
 import { Trophy, ChevronRight, Lock, TrendingUp, TrendingDown, Newspaper, Target, Shield, Zap, Plus, Check, X, Loader2, Activity, Users, AlertTriangle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { Recommendation } from '@/lib/odss/types';
+import { VIEW_ONLY } from '@/lib/view-only';
 
 function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) => void }) {
   const { topRecommendations, liveQuotes, conviction, takenTrades, confluence, indexControl, nifty } = useODSS();
@@ -381,7 +382,7 @@ function SimplePickCard({ pick, idx, q, rec, isTaken, onSelect, pickConfluence }
           {signalConfig.icon}{signalConfig.label}
         </span>
         {/* Take Trade button */}
-        {!isTaken && !showTakeForm && (
+        {!VIEW_ONLY && !isTaken && !showTakeForm && (
           <Button size="sm" variant="ghost" className="ml-auto h-6 gap-0.5 font-mono text-[9px] tracking-widest text-bull hover:bg-bull/10" onClick={(e) => { e.stopPropagation(); setShowTakeForm(true); }}>
             <Plus className="h-3 w-3" /> TAKE
           </Button>

@@ -77,8 +77,52 @@ let socket: Socket | null = null;
 let listeners = new Set<(s: ODSSState) => void>();
 let currentState: ODSSState = initialState;
 
+let pollStarted = false;
+function startPolling() {
+  if (pollStarted) return; pollStarted = true;
+  currentState = { ...currentState, connected: true };
+  const poll = async () => {
+    try {
+      const r = await fetch('/api/odss/state', { cache: 'no-store' });
+      if (!r.ok) return;
+      const s = await r.json();
+      const liveQuotes: ODSSState['liveQuotes'] = {};
+      for (const q of s.liveQuotes ?? []) liveQuotes[q.symbol] = { ltp: q.ltp, changePct: q.changePct, vwap: q.vwap, volume: q.volume, sector: q.sector };
+      currentState = {
+        ...currentState, connected: true,
+        market: s.market ?? currentState.market,
+        sectors: s.sectors ?? currentState.sectors,
+        rs: s.rs ?? currentState.rs,
+        opportunities: s.opportunities ?? currentState.opportunities,
+        conviction: s.conviction ?? currentState.conviction,
+        activeTrade: s.activeTrade ?? currentState.activeTrade,
+        topRecommendations: s.topRecommendations ?? currentState.topRecommendations,
+        indexControl: s.indexControl ?? currentState.indexControl,
+        ocConfluence: s.ocConfluence ?? currentState.ocConfluence,
+        takenTrades: s.takenTrades ?? currentState.takenTrades,
+        decisionLog: s.decisionLog ?? currentState.decisionLog,
+        vix: s.vix ?? currentState.vix,
+        nifty: s.nifty ?? currentState.nifty,
+        bankNifty: s.bankNifty ?? currentState.bankNifty,
+        liveQuotes: Object.keys(liveQuotes).length ? liveQuotes : currentState.liveQuotes,
+        lastUpdate: Date.now(),
+      };
+      emit();
+    } catch { /* keep last state */ }
+  };
+  poll();
+  setInterval(poll, 4000);
+}
+
 function connect() {
   if (socket) return socket;
+  // Remote spectators (e.g. a shared ngrok link) can't reach the local socket on
+  // :3002 — serve them a read-only view by polling the state API over HTTP.
+  const rloc = typeof window !== 'undefined' ? window.location : null;
+  if (rloc && rloc.hostname !== 'localhost' && rloc.hostname !== '127.0.0.1') {
+    startPolling();
+    return null as unknown as Socket;
+  }
   // How to reach the market-service socket (port 3002):
   //  - Hosted behind the Caddy proxy: connect to the same origin and let Caddy
   //    route ?XTransformPort=3002 to :3002.

@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button';
 import { useODSS } from '@/hooks/use-odss';
 import { DirectionBadge } from '../shared/badges';
 import { cn } from '@/lib/utils';
-import { Briefcase, X, Activity } from 'lucide-react';
+import { Briefcase, X, Activity, Users } from 'lucide-react';
+import { VIEW_ONLY } from '@/lib/view-only';
 
 function recClasses(r?: string) {
   switch (r) {
@@ -65,16 +66,29 @@ function TakenPositionsInner() {
                 {t.ocScore !== undefined && <span className="rounded bg-info/15 px-1 py-0.5 text-info">OC {t.ocScore}</span>}
                 {t.oiAction && <span className="rounded bg-muted/20 px-1 py-0.5">{String(t.oiAction).replace('_', ' ').toLowerCase()}</span>}
               </div>
+              {/* Who's in control */}
+              {t.controller && (
+                <div className="mt-1 flex items-center gap-1.5">
+                  <span className={cn('flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[9px] font-bold',
+                    t.controller === 'BUYERS' ? 'bg-bull/20 text-bull' : t.controller === 'SELLERS' ? 'bg-bear/20 text-bear' : 'bg-muted/30 text-muted-foreground')}
+                    title={t.controlEvidence?.join(' · ')}>
+                    <Users className="h-2.5 w-2.5" />{t.controller} {t.controlStrength ?? 0}%
+                  </span>
+                  {t.controlEvidence?.[0] && <span className="line-clamp-1 font-mono text-[9px] text-muted-foreground">{t.controlEvidence[0]}</span>}
+                </div>
+              )}
               {/* Recommendation */}
               <div className="mt-2 flex items-center justify-between gap-2">
                 <span className={cn('flex items-center gap-1 rounded px-2 py-1 font-mono text-[10px] font-bold tracking-widest', recClasses(t.recommendation))}>
                   <Activity className="h-3 w-3" />{t.recommendation ?? 'HOLD'}
                 </span>
-                <Button size="sm" variant="ghost" className="h-6 gap-0.5 font-mono text-[9px] tracking-widest text-bear hover:bg-bear/10"
-                  disabled={closing === t.id}
-                  onClick={async () => { setClosing(t.id); await closeTaken({ id: t.id }, 'Closed from dashboard'); setClosing(null); }}>
-                  <X className="h-3 w-3" /> CLOSE
-                </Button>
+                {!VIEW_ONLY && (
+                  <Button size="sm" variant="ghost" className="h-6 gap-0.5 font-mono text-[9px] tracking-widest text-bear hover:bg-bear/10"
+                    disabled={closing === t.id}
+                    onClick={async () => { setClosing(t.id); await closeTaken({ id: t.id }, 'Closed from dashboard'); setClosing(null); }}>
+                    <X className="h-3 w-3" /> CLOSE
+                  </Button>
+                )}
               </div>
               {t.recReason && <div className="mt-1 font-mono text-[9px] leading-snug text-muted-foreground">{t.recReason}</div>}
             </div>
