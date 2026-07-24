@@ -715,16 +715,16 @@ export function runConvictionEngine(
 
     // ── PLAIN-ENGLISH GUIDANCE (for someone with zero trading knowledge) ──
     const opt = direction === 'CE' ? 'Call' : 'Put';
-    const dirWord = direction === 'CE' ? 'go UP' : 'go DOWN';
+    const dirWord = direction === 'CE' ? 'UP' : 'DOWN';
     const who = control?.controller === 'BUYERS' ? 'Big buyers are stepping in'
       : control?.controller === 'SELLERS' ? 'Big sellers are stepping in'
       : 'Buyers and sellers are evenly matched';
-    const roomWord = room.score >= 60 ? 'plenty of room to move' : room.score >= 45 ? 'some room left' : 'little room left';
+    const roomWord = room.score >= 60 ? 'plenty of room left to move' : room.score >= 45 ? 'some room left' : 'little room left';
     let plainAction: ConvictionPick['plainAction'];
     let plainMessage: string;
     if ((grade === 'A+' || grade === 'A') && entrySignal === 'ENTER_NOW' && !trapAgainst) {
       plainAction = 'BUY NOW';
-      plainMessage = `Buy a ${opp.symbol} ${opt}. ${who} to push it ${dirWord}, with ${roomWord}. ${grade === 'A+' ? 'Very high' : 'High'} confidence — after you buy, the engine tells you exactly when to exit.`;
+      plainMessage = `Buy ${/^[AEIOU]/.test(opp.symbol) ? 'an' : 'a'} ${opp.symbol} ${opt}. ${who} to push it ${dirWord}, and there is ${roomWord}. ${grade === 'A+' ? 'Very high' : 'High'} confidence — after you buy, the engine tells you exactly when to exit.`;
     } else if (entrySignal === 'ENTER_NOW') {
       plainAction = 'CONSIDER';
       plainMessage = `A ${opp.symbol} ${opt} is ready, but only moderate confidence (grade ${grade}). Take a smaller position, or wait for a clearer one.`;
