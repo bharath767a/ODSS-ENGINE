@@ -39,6 +39,10 @@ export interface DayStats {
   date: string;               // IST YYYY-MM-DD
   signals: number; targetHit: number; stopped: number; open: number; flat: number;
   hitRatePct: number | null;  // hit / (hit + stopped); null until something resolves
+  // Calibration evidence: which grades / hours actually deliver. This is what
+  // threshold tuning stands on — never tune on vibes.
+  byGrade: Record<string, { signals: number; hit: number; stopped: number }>;
+  byHour: Record<string, { signals: number; hit: number; stopped: number }>;
 }
 
 interface State { date: string; items: PickOutcome[]; pastDays: DayStats[]; }
@@ -138,6 +142,18 @@ export function closeOutcomesForDay(): void {
 function computeStats(): DayStats {
   const hit = state.items.filter(o => o.status === 'TARGET_HIT').length;
   const stop = state.items.filter(o => o.status === 'STOPPED').length;
+  const byGrade: DayStats['byGrade'] = {};
+  const byHour: DayStats['byHour'] = {};
+  for (const o of state.items) {
+    const g = o.grade ?? '?';
+    const h = `${new Date(o.at + 5.5 * 3600_000).getUTCHours()}h`;   // IST hour of the signal
+    for (const [key, bucket] of [[g, byGrade], [h, byHour]] as const) {
+      bucket[key] ??= { signals: 0, hit: 0, stopped: 0 };
+      bucket[key].signals++;
+      if (o.status === 'TARGET_HIT') bucket[key].hit++;
+      if (o.status === 'STOPPED') bucket[key].stopped++;
+    }
+  }
   return {
     date: state.date,
     signals: state.items.length,
@@ -145,6 +161,7 @@ function computeStats(): DayStats {
     open: state.items.filter(o => o.status === 'OPEN').length,
     flat: state.items.filter(o => o.status === 'EOD_FLAT').length,
     hitRatePct: hit + stop > 0 ? Math.round((hit / (hit + stop)) * 100) : null,
+    byGrade, byHour,
   };
 }
 

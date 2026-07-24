@@ -35,6 +35,7 @@
  * pePicks, primePicks, and the extra per-pick scores) are additive.
  */
 import { getRecentArchived } from '../news/archive';
+import { causalNewsImpact } from '../news/causal-map';
 import { readFileSync, writeFileSync } from 'fs';
 import { dataPath, ensureDataDir } from '../data-dir';
 import type {
@@ -472,7 +473,12 @@ function calculateNewsMomentum(symbol: string, sector: string) {
     // (it caused unrelated headlines to show on the wrong ticker).
     const stockNews = recent.filter((item: any) => item.entities?.stocks?.includes(symbol));
     const relevant = stockNews;
-    if (relevant.length === 0) return { direction: 'NEUTRAL' as const, boost: 0, headlines: [] as string[], hasEarnings: false };
+    // CAUSAL LINKAGE: second-order macro/sector effects (crude→OMCs, rupee→IT,
+    // Accenture→Indian IT, RBI→banks…). Works even with ZERO direct stock news —
+    // that's exactly the desk-style read retail misses. Capped ±10 so causal
+    // context supports a pick but never manufactures one; reasons are shown.
+    const causal = causalNewsImpact(symbol, sector, recent);
+    if (relevant.length === 0 && causal.boost === 0) return { direction: 'NEUTRAL' as const, boost: 0, headlines: [] as string[], hasEarnings: false };
     const positive = relevant.filter((r: any) => r.sentiment === 'POSITIVE').length;
     const negative = relevant.filter((r: any) => r.sentiment === 'NEGATIVE').length;
     const hasEarnings = relevant.some((r: any) => r.entities?.eventTypes?.includes('EARNINGS') || r.entities?.eventTypes?.includes('GUIDANCE'));
@@ -483,8 +489,10 @@ function calculateNewsMomentum(symbol: string, sector: string) {
     else if (positive > negative) { boost += 3; direction = 'POSITIVE'; }
     else if (negative > positive) { boost -= 5; direction = 'NEGATIVE'; }
     if (relevant.some((r: any) => r.entities?.impactMagnitude === 'HIGH')) boost = direction === 'NEGATIVE' ? Math.min(boost - 5, -10) : boost + 3;
-    boost = Math.max(-20, Math.min(20, boost));
-    return { direction, boost, headlines: relevant.slice(0, 3).map((r: any) => r.title), hasEarnings };
+    boost = Math.max(-20, Math.min(20, boost + causal.boost));
+    if (direction === 'NEUTRAL') direction = boost >= 5 ? 'POSITIVE' : boost <= -5 ? 'NEGATIVE' : 'NEUTRAL';
+    const headlines = [...relevant.slice(0, 2).map((r: any) => r.title), ...causal.notes].slice(0, 3);
+    return { direction, boost, headlines, hasEarnings };
   } catch { return { direction: 'NEUTRAL' as const, boost: 0, headlines: [] as string[], hasEarnings: false }; }
 }
 
