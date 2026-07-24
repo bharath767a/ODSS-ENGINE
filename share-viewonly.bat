@@ -70,9 +70,9 @@ echo ============================================================
 echo  Copy the https://....ngrok URL from the NGROK window and
 echo  send it to your mentor. It is READ-ONLY and expires today.
 echo ============================================================
-echo Auto-expiry armed for 15:31 IST. Keep THIS window open.
+echo Auto-expiry armed for 15:30 IST (market close). Keep THIS window open.
 echo (Close this or the ngrok window to expire the link early.)
-powershell -NoProfile -Command "$c=[DateTime]::Today.AddHours(15).AddMinutes(31);$n=Get-Date;if($n -lt $c){Start-Sleep -Seconds ([int]($c-$n).TotalSeconds)};Get-Process ngrok -ErrorAction SilentlyContinue|Stop-Process -Force;Get-NetTCPConnection -LocalPort 3001 -State Listen -ErrorAction SilentlyContinue|ForEach-Object{Stop-Process -Id $_.OwningProcess -Force};Write-Host 'View-only share EXPIRED (market close).'"
+powershell -NoProfile -Command "$c=[DateTime]::Today.AddHours(15).AddMinutes(30);$n=Get-Date;if($n -lt $c){Start-Sleep -Seconds ([int]($c-$n).TotalSeconds)};Get-Process ngrok -ErrorAction SilentlyContinue|Stop-Process -Force;Get-NetTCPConnection -LocalPort 3001 -State Listen -ErrorAction SilentlyContinue|ForEach-Object{Stop-Process -Id $_.OwningProcess -Force};Write-Host 'View-only share EXPIRED at market close (15:30).'"
 echo Share expired.
 pause
 endlocal

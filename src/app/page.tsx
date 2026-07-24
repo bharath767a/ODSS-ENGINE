@@ -255,7 +255,7 @@ function ODSSDashboard() {
           {/* DASHBOARD */}
           <TabsContent value="dashboard" className="space-y-3">
             <MarketBriefPanel />
-            <HealthMonitorPanel />
+            {!VIEW_ONLY && <HealthMonitorPanel />}
             <LearningPanel />
             <div className="grid gap-3 lg:grid-cols-3">
               <div className="space-y-3">
