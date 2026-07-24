@@ -50,6 +50,17 @@ export const OI_PACK = {
   // ── Controller cutoffs (controlScore −100..+100) ──
   controlBuyers: 20, controlSellers: -20, controlBias: 15,
 
+  // ── Sample sufficiency (anti-noise, critical at the open) ──
+  // The raw control score is a RATIO of bullish vs bearish flow, so it is
+  // scale-free: at 09:15, when barely any intraday OI has printed, a single
+  // strike with a handful of contracts reads a full ±100. That is how every
+  // pick ends up "SELLERS 100%" in the first minutes. So the flow score is
+  // scaled by how much fresh OI has actually printed and how many strikes are
+  // participating — the read EARNS its conviction as the session builds.
+  fullConfFreshOIRatio: 0.05,  // near-money Σ|ΔOI| ÷ standing near-money OI for full trust
+  fullConfActiveStrikes: 6,    // strikes showing a non-FLAT flow for full trust
+  minSufficiency: 0.35,        // below this we report BALANCED / "flow not readable yet"
+
   // ── Early-flow ignition ──
   earlyFlowIntensity: 60,   // 0-100 near-money freshness+turnover
   earlyFlowStrength: 60,    // control strength

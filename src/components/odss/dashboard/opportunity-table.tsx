@@ -474,7 +474,12 @@ function SimplePickCard({ pick, idx, q, rec, isTaken, onSelect, pickConfluence }
               pick.controller === 'BUYERS' ? 'bg-bull/20 text-bull' : pick.controller === 'SELLERS' ? 'bg-bear/20 text-bear' : 'bg-muted/30 text-muted-foreground')}
             title={pick.controlEvidence?.join(' · ')}
           >
-            <Users className="h-2.5 w-2.5" />{pick.controller} {pick.controlStrength ?? 0}%
+            <Users className="h-2.5 w-2.5" />
+            {/* Until enough intraday OI has printed, say so rather than showing a
+                confident-looking percentage built on a handful of contracts. */}
+            {pick.controlReadable === false
+              ? `FLOW BUILDING ${pick.controlDataQuality ?? 0}%`
+              : `${pick.controller} ${pick.controlStrength ?? 0}%`}
           </span>
           {pick.controlEvidence?.[0] && (
             <span className="line-clamp-1 font-mono text-[9px] text-muted-foreground">{pick.controlEvidence[0]}</span>

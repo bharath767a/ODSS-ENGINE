@@ -125,6 +125,8 @@ export interface ControlResult {
   gammaRegime: 'PINNED' | 'TRENDING' | 'NEUTRAL';
   flowIntensity: number;       // 0-100 how FRESH/aggressive near-money positioning is
   earlyFlow: boolean;          // strong + fresh directional flow → early-mover ignition
+  dataQuality: number;         // 0-100 how much real flow the read is standing on
+  readable: boolean;           // false = too little fresh OI to call a controller yet
   timestamp: number;
 }
 

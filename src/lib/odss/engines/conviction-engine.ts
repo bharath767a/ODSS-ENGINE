@@ -65,6 +65,8 @@ export interface ConvictionPick {
   controller?: string;         // BUYERS / SELLERS / BALANCED
   controlScore?: number;       // -100 (sellers) .. +100 (buyers)
   controlStrength?: number;    // 0-100
+  controlDataQuality?: number; // 0-100 how much real flow the control read stands on
+  controlReadable?: boolean;   // false = chain hasn't printed enough OI to read yet
   controlEvidence?: string[];  // top order-flow reasons
   trap?: boolean;              // chain contradicts this side (trap risk)
   trapNote?: string;
@@ -316,13 +318,23 @@ function roomToRun(
   const notes: string[] = [];
   if (!t || ltp <= 0) return { score: 50, notes: ['Insufficient data for room estimate'] };
   const bull = dir === 'CE';
-  const atr = (t.atr && t.atr > 0) ? t.atr : Math.max(ltp * 0.008, 0.01);
+  // In the first bars of a session the indicators are not warmed up yet: ATR can
+  // be a tiny-but-positive number and RSI a flat 0. Both pass a naive `> 0`
+  // check and then poison everything downstream (dist/atr blowing up to "162
+  // ATR of clear room", "RSI 0 oversold"). Treat degenerate values as MISSING.
+  const atrRaw = t.atr ?? 0;
+  const atrWarm = atrRaw >= ltp * 0.0015;        // ATR below 0.15% of price = not warmed up
+  const atr = atrWarm ? atrRaw : Math.max(ltp * 0.008, 0.01);
+  const rsiRaw = t.rsi;
+  const rsiWarm = typeof rsiRaw === 'number' && rsiRaw > 1 && rsiRaw < 99;
+  const rsi = rsiWarm ? rsiRaw : 50;             // neutral until it means something
   let s = 0, w = 0;
   const add = (val: number, weight: number) => { s += clamp(val) * weight; w += weight; };
 
   // 1) RSI zone — trending with room, not exhausted
-  const rsi = t.rsi ?? 50;
-  if (bull) {
+  if (!rsiWarm) {
+    add(50, 1.2);                                 // no opinion yet
+  } else if (bull) {
     // ideal ~60, still-has-room band 50-70; >78 exhausted; <45 no thrust
     let r = bell(rsi, 60, 22);
     if (rsi > 78) { r = Math.min(r, 15); notes.push(`RSI ${rsi.toFixed(0)} overbought — move likely exhausted`); }
@@ -620,6 +632,15 @@ export function runConvictionEngine(
     // so the engine surfaces the mover near the START, not after it's 60% done.
     const earlyMover = !!control?.earlyFlow && controlFit >= 60 && room.score >= 55;
 
+    // ── News → direction-aligned fit (same idea as controlFit) ──
+    // news.boost scores the news FOR THE STOCK (bad news = negative). Whether
+    // that helps or hurts depends on the side we're trading: bad news HURTS a
+    // Call and HELPS a Put. Applying the raw boost to both sides was penalising
+    // Puts for exactly the news that made them the right trade.
+    const newsAligned = direction === 'CE' ? news.boost : -news.boost;   // −20..+20
+    const newsFit = clamp(50 + newsAligned * 2.5);
+    const newsAgainst = newsAligned <= -10;
+
     // Composite conviction — ROOM-TO-TARGET is now a top driver (22%) so the
     // stocks that surface are the ones with the move still ahead of them, not
     // the ones that already ran. Technical + real order-flow control follow.
@@ -628,7 +649,7 @@ export function runConvictionEngine(
       0.14 * ocH +
       0.16 * controlFit +
       0.06 * fundFit +
-      0.06 * clamp(50 + news.boost * 2.5) +
+      0.06 * newsFit +
       0.22 * room.score +
       0.12 * stability.score,
     );
@@ -645,15 +666,21 @@ export function runConvictionEngine(
     // AVOID — otherwise "BUYERS 84%" next to "AVOID" reads as a contradiction.
     let entrySignal: EntrySignal = 'WAIT';
     let entrySignalReason = '';
-    const flowAgainst = controlContradicts || (news.direction === 'NEGATIVE' && news.boost <= -10);
+    const flowAgainst = controlContradicts || newsAgainst;
     if (flowAgainst) {
       entrySignal = 'AVOID';
       entrySignalReason = trapAgainst ? 'trap — order flow against the price move'
         : control && controlFit < 40 ? `order flow ${direction === 'CE' ? 'bearish (sellers in control)' : 'bullish (buyers in control)'} — wrong side`
-        : 'negative news flow';
+        : `news is working against this ${direction === 'CE' ? 'Call' : 'Put'}`;
     } else if (conviction < 45) {
       entrySignal = 'AVOID'; entrySignalReason = 'setup too weak';
-    } else if (conviction >= 68 && room.score >= 50 && controlFit >= 50 && stability.class !== 'VOLATILE') {
+    } else if (control && !control.readable) {
+      // "BUY NOW" is the engine's strongest statement — it must stand on real
+      // order flow, never on a chain that hasn't printed enough OI to be read
+      // (typically the first ~20 minutes of the session).
+      entrySignal = 'WAIT';
+      entrySignalReason = `order flow still building (${control.dataQuality}% of a readable sample) — wait for the chain to confirm`;
+    } else if (conviction >= 68 && room.score >= 50 && controlFit >= OI_PACK.grade.control && stability.class !== 'VOLATILE') {
       entrySignal = 'ENTER_NOW'; entrySignalReason = 'flow + room aligned — move still ahead';
     } else if (room.score < 40) {
       entrySignal = 'WAIT'; entrySignalReason = `extended (room ${room.score}) — wait for a pullback${(rec.technical?.vwap ?? 0) > 0 ? ` toward ${Math.round(rec.technical.vwap)}` : ''}`;
@@ -703,11 +730,16 @@ export function runConvictionEngine(
       plainMessage = `A ${opp.symbol} ${opt} is ready, but only moderate confidence (grade ${grade}). Take a smaller position, or wait for a clearer one.`;
     } else if (entrySignal === 'WAIT') {
       plainAction = 'WAIT';
-      const why = room.score < 45 ? `it has already moved a lot — wait for a small ${direction === 'CE' ? 'dip' : 'bounce'} before buying` : `it is still forming — wait for it to confirm`;
+      const why = control && !control.readable
+        ? `the big-money option activity hasn't shown up yet this morning — the engine won't guess. Give it ~15 more minutes`
+        : room.score < 45 ? `it has already moved a lot — wait for a small ${direction === 'CE' ? 'dip' : 'bounce'} before buying`
+        : `it is still forming — wait for it to confirm`;
       plainMessage = `Don't buy yet. This ${opt} looks promising but ${why}.`;
     } else {
       plainAction = 'SKIP';
-      const why = trapAgainst ? `the option activity is going the OTHER way (trap risk)` : news.direction === 'NEGATIVE' ? `there is negative news pressure` : `the setup isn't clean`;
+      const why = trapAgainst ? `the option activity is going the OTHER way (trap risk)`
+        : newsAgainst ? `the news is pushing the stock the OTHER way`
+        : `the setup isn't clean`;
       plainMessage = `Skip this one — ${why}. There will be better opportunities.`;
     }
 
@@ -723,6 +755,7 @@ export function runConvictionEngine(
       fundamentalScore: fund.total, fundamentalRating: fund.rating,
       controller: control?.controller, controlScore: control?.controlScore,
       controlStrength: control?.strength, controlEvidence: control?.evidence?.slice(0, 3),
+      controlDataQuality: control?.dataQuality, controlReadable: control?.readable,
       trap: trapAgainst, trapNote: trapAgainst ? control?.trapNote : undefined,
       grade, gradeScore, gradeReasons, earlyFlow: earlyMover,
       plainAction, plainMessage,

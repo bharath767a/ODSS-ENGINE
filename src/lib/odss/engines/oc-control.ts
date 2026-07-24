@@ -88,10 +88,13 @@ export function runControlEngine(chain: OptionChain, underlyingChangePct = 0): C
 
   const proximity = (strike: number) => Math.exp(-((strike - spot) ** 2) / (2 * sigma * sigma));
 
+  let activeStrikes = 0;            // strikes actually showing a flow (sample size)
+
   const consider = (r: OptionRow, isCall: boolean) => {
     if (proximity(r.strike) > 0.5) { nearOI += r.oi; nearAbsOIChg += Math.abs(r.oiChange); nearVol += r.volume; }
     const f = classifyFlow(r.oiChange, r.ltpChange, r.oi);
     if (f === 'FLAT') return;
+    activeStrikes++;
     const w = proximity(r.strike) * ((1 - OI_PACK.deltaWeight) + OI_PACK.deltaWeight * Math.min(1, Math.abs(r.delta)));
     const mag = Math.abs(r.oiChange) * w;
     const sign = isCall ? callSign(f) : putSign(f);
@@ -113,9 +116,22 @@ export function runControlEngine(chain: OptionChain, underlyingChangePct = 0): C
   for (const r of calls) consider(r, true);
   for (const r of puts) consider(r, false);
 
-  // Net normalised control score in −100..+100.
+  // ── SAMPLE SUFFICIENCY ──
+  // (bull−bear)/total is a RATIO, so it saturates to ±100 on almost no data —
+  // at 09:15 a couple of contracts on one strike would read "SELLERS 100%".
+  // Scale the flow read by how much fresh OI has actually printed and how many
+  // strikes are participating, so conviction is EARNED as the session builds.
+  const freshRatio = nearOI > 0 ? nearAbsOIChg / nearOI : 0;
+  const sufficiency = clamp(
+    Math.min(freshRatio / OI_PACK.fullConfFreshOIRatio, activeStrikes / OI_PACK.fullConfActiveStrikes),
+    0, 1,
+  );
+  const dataQuality = Math.round(sufficiency * 100);
+  const readable = sufficiency >= OI_PACK.minSufficiency;
+
+  // Net normalised control score in −100..+100, damped by sufficiency.
   const total = bull + bear;
-  let controlScore = total > 0 ? (100 * (bull - bear)) / total : 0;
+  let controlScore = total > 0 ? ((100 * (bull - bear)) / total) * sufficiency : 0;
 
   // ── Modifiers (kept modest so raw flow dominates) ──
   const pcr = chain.pcr || 1;
@@ -152,13 +168,20 @@ export function runControlEngine(chain: OptionChain, underlyingChangePct = 0): C
       : (spot >= resistanceStrike || spot <= supportStrike) ? 'TRENDING' : 'NEUTRAL';
 
   // ── Controller + bias ──
-  const controller: Controller = controlScore > OI_PACK.controlBuyers ? 'BUYERS' : controlScore < OI_PACK.controlSellers ? 'SELLERS' : 'BALANCED';
+  // Until enough real flow has printed we refuse to name a controller: an
+  // honest "not readable yet" beats a confident number built on noise.
+  const controller: Controller = !readable ? 'BALANCED'
+    : controlScore > OI_PACK.controlBuyers ? 'BUYERS'
+      : controlScore < OI_PACK.controlSellers ? 'SELLERS' : 'BALANCED';
   const strength = Math.min(100, Math.abs(controlScore));
-  const bias: Bias = controlScore > OI_PACK.controlBias ? 'LONG' : controlScore < -OI_PACK.controlBias ? 'SHORT' : 'NEUTRAL';
+  const bias: Bias = !readable ? 'NEUTRAL'
+    : controlScore > OI_PACK.controlBias ? 'LONG'
+      : controlScore < -OI_PACK.controlBias ? 'SHORT' : 'NEUTRAL';
 
   // ── Trap: price and positioning disagree ──
   let trap = false; let trapNote: string | undefined;
-  if (underlyingChangePct > 0.4 && controlScore < -25) {
+  if (!readable) { /* too little flow to call a trap */ }
+  else if (underlyingChangePct > 0.4 && controlScore < -25) {
     trap = true; trapNote = `Price up ${underlyingChangePct.toFixed(1)}% but sellers control the chain — possible BULL TRAP`;
   } else if (underlyingChangePct < -0.4 && controlScore > 25) {
     trap = true; trapNote = `Price down ${Math.abs(underlyingChangePct).toFixed(1)}% but buyers control the chain — possible BEAR TRAP / reversal`;
@@ -186,13 +209,15 @@ export function runControlEngine(chain: OptionChain, underlyingChangePct = 0): C
   const flowIntensity = nearOI > 0
     ? Math.round(clamp((nearAbsOIChg / nearOI) * 220 + (nearVol / nearOI) * 55, 0, 100))
     : 0;
-  const earlyFlow = flowIntensity >= OI_PACK.earlyFlowIntensity && strength >= OI_PACK.earlyFlowStrength && Math.abs(controlScore) >= OI_PACK.earlyFlowScore;
+  const earlyFlow = readable && flowIntensity >= OI_PACK.earlyFlowIntensity && strength >= OI_PACK.earlyFlowStrength && Math.abs(controlScore) >= OI_PACK.earlyFlowScore;
   if (earlyFlow) evidence.unshift(`🔥 Early flow — fresh ${controlScore > 0 ? 'bullish' : 'bearish'} positioning (intensity ${flowIntensity})`);
+  if (!readable) evidence.unshift(`Flow not readable yet — only ${activeStrikes} strike(s) active, ${(freshRatio * 100).toFixed(1)}% of near-money OI is fresh (needs ${(OI_PACK.fullConfFreshOIRatio * 100).toFixed(0)}%)`);
 
   return {
-    controller, controlScore, strength, bias,
+    controller, controlScore: Math.round(controlScore), strength, bias,
     evidence: evidence.slice(0, 6), trap, trapNote,
     supportStrike, resistanceStrike, maxPain, pcr, ivSkew,
-    pinStrike, gammaRegime, flowIntensity, earlyFlow, timestamp: Date.now(),
+    pinStrike, gammaRegime, flowIntensity, earlyFlow,
+    dataQuality, readable, timestamp: Date.now(),
   };
 }
