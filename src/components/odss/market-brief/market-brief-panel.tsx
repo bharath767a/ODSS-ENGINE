@@ -94,15 +94,15 @@ interface MarketBrief {
   bankNiftyChangePct: number;
   vix: number;
   vixChange: number;
-  sensexClose: number;
-  sensexChange: number;
-  sensexChangePct: number;
+  sensexClose: number | null;
+  sensexChange: number | null;
+  sensexChangePct: number | null;
   breadth: { advances: number; declines: number; ratio: number };
   aiSummary: string;
   aiPrediction: string;
   keyRisks: string[];
   keyOpportunities: string[];
-  fiiDiiSummary: FiiDiiSummary;
+  fiiDiiSummary: FiiDiiSummary | null;
   topGainers: GainerLoserItem[];
   topLosers: GainerLoserItem[];
   news: NewsItem[];
@@ -303,13 +303,20 @@ export function MarketBriefPanel() {
                 icon={<Gauge className="h-3 w-3" />}
                 vixMode
               />
-              <IndexTile
-                label="SENSEX"
-                value={brief.sensexClose}
-                change={brief.sensexChange}
-                changePct={brief.sensexChangePct}
-                icon={<Activity className="h-3 w-3" />}
-              />
+              {brief.sensexClose !== null && brief.sensexChange !== null && brief.sensexChangePct !== null ? (
+                <IndexTile
+                  label="SENSEX"
+                  value={brief.sensexClose}
+                  change={brief.sensexChange}
+                  changePct={brief.sensexChangePct}
+                  icon={<Activity className="h-3 w-3" />}
+                />
+              ) : (
+                <div className="flex flex-col justify-center rounded-lg border border-purple-100 bg-white/60 p-3">
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-muted-foreground">SENSEX</span>
+                  <span className="mt-1 text-[10px] text-muted-foreground">feed unavailable</span>
+                </div>
+              )}
             </div>
 
             {/* Breadth + FII/DII summary */}
@@ -356,11 +363,22 @@ export function MarketBriefPanel() {
                 </div>
               </div>
 
-              {/* FII / DII */}
+              {/* FII / DII — REAL NSE provisional numbers, or an honest "unavailable" */}
+              {!brief.fiiDiiSummary ? (
+                <div className="flex flex-col justify-center rounded-lg border border-purple-100 bg-white/60 p-3">
+                  <span className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
+                    <Banknote className="h-3 w-3 text-purple-500" /> FII / DII Activity
+                  </span>
+                  <span className="mt-1 text-[10px] text-muted-foreground">
+                    NSE feed unavailable right now — numbers are shown only when real (published daily ~after close).
+                  </span>
+                </div>
+              ) : (
               <div className="rounded-lg border border-purple-100 bg-white/60 p-3">
                 <div className="mb-2 flex items-center justify-between">
                   <span className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">
                     <Banknote className="h-3 w-3 text-purple-500" /> FII / DII Activity
+                    {(brief.fiiDiiSummary as any).asOf && <span className="ml-1 normal-case tracking-normal">({(brief.fiiDiiSummary as any).asOf} · NSE)</span>}
                   </span>
                   <Badge
                     variant="outline"
@@ -404,6 +422,7 @@ export function MarketBriefPanel() {
                   {brief.fiiDiiSummary.interpretation}
                 </p>
               </div>
+              )}
             </div>
 
             {/* AI Summary + Prediction */}

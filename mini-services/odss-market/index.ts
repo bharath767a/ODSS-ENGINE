@@ -39,6 +39,9 @@ import { getMarketSession, shouldEngineBeActive, shouldPollRealData } from '../.
 import { getIVSpikePct } from '../../src/lib/odss/engines/oc-confluence';
 import { applyPlainGuidance } from '../../src/lib/odss/engines/conviction-engine';
 import { recordDisplayedPicks, updateOutcomes, closeOutcomesForDay, getPickStats } from '../../src/lib/odss/engines/pick-outcomes';
+import { buildMorningPlaybook, loadMorningPlaybook } from '../../src/lib/odss/engines/morning-playbook';
+import { refreshRangeProfiles } from '../../src/lib/odss/engines/range-profile';
+import { getRecentArchived } from '../../src/lib/odss/news/archive';
 import { dataPath, ensureDataDir } from '../../src/lib/odss/data-dir';
 import type { Direction } from '../../src/lib/odss/types';
 
@@ -302,15 +305,25 @@ async function runEODScan(reason: string, limit = 999): Promise<any> {
   try {
     const records: any[] = [];
     const targets = STOCKS.slice(0, limit);
-    for (const meta of targets) {
+    const failed: typeof targets = [];
+    const scanOne = async (meta: (typeof targets)[number]): Promise<boolean> => {
       try {
         const raw = await bridge.getRawOptionChain(meta.symbol);
-        if (!raw) continue;
+        if (!raw) return false;
         const chain = mapBridgeChain(meta.symbol, raw);
-        if (!chain) continue;
+        if (!chain) return false;
         const rec = buildEODRecord(meta.symbol, meta.sector, chain);
-        if (rec) records.push(rec);
-      } catch { /* skip symbol */ }
+        if (rec) { records.push(rec); return true; }
+        return false;
+      } catch { return false; }
+    };
+    for (const meta of targets) { if (!(await scanOne(meta))) failed.push(meta); }
+    // One retry pass — Dhan 429s and transient misses recover on the second try.
+    if (failed.length) {
+      console.log(`[odss-market] EOD scan: retrying ${failed.length} failed symbols...`);
+      const still: string[] = [];
+      for (const meta of failed) { if (!(await scanOne(meta))) still.push(meta.symbol); }
+      if (still.length) console.warn(`[odss-market] EOD scan: ${still.length}/${targets.length} symbols had no usable chain: ${still.slice(0, 12).join(', ')}${still.length > 12 ? '…' : ''}`);
     }
     const report = buildEODReport(records, istDayKey());
     saveEODReport(report);
@@ -337,6 +350,42 @@ setInterval(() => {
   } catch { /* ignore */ }
 }, 60_000);
 console.log('[odss-market] EOD positioning scanner armed (auto after close)');
+
+// ─── MORNING PLAYBOOK (P3) ───
+// Once per day, at pre-open (or first minutes), synthesise yesterday's EOD
+// positioning with overnight news into TODAY'S PLAYBOOK — ready before retail
+// has finished reading headlines. No EOD report → no playbook (honest).
+let playbookDay = '';
+setInterval(() => {
+  try {
+    const session = getMarketSession();
+    if (playbookDay === istDayKey()) return;
+    if (!(session.isPreOpen || session.isOpen)) return;
+    const eod = (getStore() as any).eodReport ?? loadEODReport();
+    if (!eod) { playbookDay = istDayKey(); console.warn('[odss-market] No EOD report — morning playbook skipped'); return; }
+    const overnight = getRecentArchived(18) ?? [];   // covers 15:30 yesterday → now
+    const pb = buildMorningPlaybook(eod, overnight);
+    if (pb) {
+      (getStore() as any).morningPlaybook = pb;
+      io.emit('playbook', pb);
+      console.log(`[odss-market] Morning playbook ready: ${pb.items.length} setups (from EOD ${pb.eodDate})`);
+    }
+    playbookDay = istDayKey();
+  } catch (e) { console.warn('[odss-market] playbook error:', (e as Error).message); }
+}, 60_000);
+
+// ─── RANGE PROFILES (per-symbol typical-day-range percentiles) ───
+// Refresh once per day from real Yahoo daily history (~100 spaced fetches).
+let rangeDay = '';
+setInterval(async () => {
+  try {
+    if (rangeDay === istDayKey()) return;
+    rangeDay = istDayKey();
+    const syms = [...STOCKS.map(s => s.symbol), 'NIFTY', 'BANKNIFTY'];
+    const r = await refreshRangeProfiles(syms);
+    console.log(`[odss-market] Range profiles ${r.skipped ? 'already current' : `refreshed: ${r.ok} ok / ${r.failed} failed`}`);
+  } catch (e) { console.warn('[odss-market] range profile error:', (e as Error).message); }
+}, 120_000);
 
 // Reset the completed-squeeze log once at the start of each trading day.
 let squeezeLogDay = '';
@@ -655,6 +704,7 @@ setInterval(async () => {
         ocConfluence,
         indexControl,
         pickStats: (store as any).pickStats || null,
+        morningPlaybook: (store as any).morningPlaybook ?? loadMorningPlaybook(),
         decisionLog: store.decisionLog.slice(0, 50),
         completedTrades: store.completedTrades.slice(0, 20),
         lastScanAt: store.lastScanAt,

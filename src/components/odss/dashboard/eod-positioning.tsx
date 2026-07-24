@@ -38,7 +38,7 @@ function Row({ r, bull }: { r: any; bull: boolean }) {
 }
 
 function EODPositioningInner() {
-  const { runEOD } = useODSS();
+  const { runEOD, morningPlaybook } = useODSS();
   const [report, setReport] = useState<any>(null);
   const [running, setRunning] = useState(false);
 
@@ -80,6 +80,33 @@ function EODPositioningInner() {
         </CardTitle>
       </CardHeader>
       <CardContent className="p-3">
+        {/* 🌅 TODAY'S PLAYBOOK — yesterday's positioning × overnight news, ready before the open */}
+        {morningPlaybook?.items?.length > 0 && (
+          <div className="mb-3 rounded-lg border border-warn/30 bg-warn/5 p-2">
+            <div className="mb-1.5 flex items-center justify-between">
+              <span className="font-mono text-[10px] font-bold uppercase tracking-widest text-warn">🌅 Today's Playbook — positioning × overnight news</span>
+              <span className="font-mono text-[9px] text-muted-foreground">from EOD {morningPlaybook.eodDate} · {fmtTime(morningPlaybook.generatedAt)}</span>
+            </div>
+            <div className="grid grid-cols-1 gap-1.5 lg:grid-cols-2">
+              {morningPlaybook.items.slice(0, 8).map((it: any) => (
+                <div key={`pb-${it.symbol}-${it.side}`} className={cn('rounded border p-1.5',
+                  it.verdict === 'ALIGNED' ? 'border-bull/30 bg-bull/5' : it.verdict === 'CAUTION' ? 'border-bear/30 bg-bear/5' : 'border-border/40 bg-card/40')}>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-sans text-xs font-bold">{it.symbol}</span>
+                    <DirectionBadge direction={it.side} />
+                    <span className={cn('rounded px-1 py-0.5 font-mono text-[8px] font-bold',
+                      it.verdict === 'ALIGNED' ? 'bg-bull/20 text-bull' : it.verdict === 'CAUTION' ? 'bg-bear/20 text-bear' : 'bg-muted/30 text-muted-foreground')}>
+                      {it.verdict === 'ALIGNED' ? '✓ NEWS ALIGNED' : it.verdict === 'CAUTION' ? '⚠ NEWS AGAINST' : 'QUIET'}
+                    </span>
+                    <span className="font-mono text-[8px] text-muted-foreground">EOD {it.eodScore > 0 ? '+' : ''}{it.eodScore}</span>
+                  </div>
+                  <div className="mt-0.5 font-sans text-[9px] leading-snug text-foreground/85">{it.plain}</div>
+                  {it.newsNotes?.[0] && <div className="mt-0.5 font-mono text-[8px] text-muted-foreground line-clamp-1">{it.newsNotes[0]}</div>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {!hasData ? (
           <div className="py-4 text-center font-mono text-[10px] text-muted-foreground">
             No positioning report yet. It runs automatically after market close (or hit SCAN) — reads the day's option-chain OI to rank tomorrow's bullish / bearish setups.

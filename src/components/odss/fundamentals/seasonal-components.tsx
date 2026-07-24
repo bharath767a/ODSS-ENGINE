@@ -228,6 +228,7 @@ export function SeasonalCalendarView() {
             <Calendar className="h-4 w-4 text-purple-600" />
           </div>
           <span className="text-base font-bold text-purple-700">SEASONAL PATTERNS</span>
+          <span className="rounded bg-warn/20 px-1.5 py-0.5 font-mono text-[9px] font-bold text-warn" title="These are heuristic tendencies, NOT statistics computed from historical price data. Do not size trades on them.">ILLUSTRATIVE — NOT REAL STATS</span>
           <span className="font-mono text-[10px] font-normal text-muted-foreground">
             · historical monthly tendencies across sectors &amp; stocks
           </span>

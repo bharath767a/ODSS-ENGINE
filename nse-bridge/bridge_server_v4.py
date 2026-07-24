@@ -676,6 +676,54 @@ async def get_indices():
     return {"indices": indices}
 
 
+# ============================================================
+# REAL FII/DII cash-market flows (NSE publishes daily, ~post-close)
+# ============================================================
+_fiidii_cache = {"ts": 0.0, "data": None}
+
+@app.get("/fiidii")
+async def get_fiidii():
+    """Real FII/DII provisional cash-market numbers from NSE.
+    Returns null data (200) when NSE is unreachable - the dashboard shows an
+    honest 'unavailable' instead of fabricated numbers."""
+    now = time.time()
+    if _fiidii_cache["data"] is not None and now - _fiidii_cache["ts"] < 1800:
+        return {"source": "NSE", "cached": True, "data": _fiidii_cache["data"]}
+    try:
+        ses = requests.Session()
+        ua = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
+              "Accept-Language": "en-US,en;q=0.9"}
+        # NSE requires a cookie warm-up hit before its JSON APIs respond.
+        ses.get("https://www.nseindia.com", headers=ua, timeout=8)
+        r = ses.get("https://www.nseindia.com/api/fiidiiTradeReact", headers={**ua, "Referer": "https://www.nseindia.com/reports/fii-dii"}, timeout=8)
+        r.raise_for_status()
+        rows = r.json()
+        out = {}
+        for row in rows:
+            cat = str(row.get("category", "")).upper()
+            item = {
+                "date": row.get("date"),
+                "buyCrore": float(row.get("buyValue") or 0),
+                "sellCrore": float(row.get("sellValue") or 0),
+                "netCrore": float(row.get("netValue") or 0),
+            }
+            if "FII" in cat or "FPI" in cat:
+                out["fii"] = item
+            elif "DII" in cat:
+                out["dii"] = item
+        if "fii" in out or "dii" in out:
+            _fiidii_cache["ts"] = now
+            _fiidii_cache["data"] = out
+            return {"source": "NSE", "cached": False, "data": out}
+        return {"source": "NSE", "data": None, "error": "unexpected response shape"}
+    except Exception as e:
+        logging.warning(f"fiidii fetch failed: {e}")
+        # Serve a stale cache (up to 12h) rather than nothing - still real data.
+        if _fiidii_cache["data"] is not None and now - _fiidii_cache["ts"] < 43200:
+            return {"source": "NSE", "cached": True, "stale": True, "data": _fiidii_cache["data"]}
+        return {"source": "NSE", "data": None, "error": str(e)}
+
+
 @app.get("/control/status")
 async def control_status():
     return {

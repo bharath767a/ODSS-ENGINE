@@ -24,7 +24,14 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   try {
     const months = buildSeasonalCalendar();
-    return NextResponse.json({ months, timestamp: Date.now() });
+    return NextResponse.json({
+      months,
+      timestamp: Date.now(),
+      // HONESTY: these are heuristic patterns, NOT computed from price history.
+      // Until real 5y monthly stats are built, the UI must label them as such.
+      dataBasis: 'HEURISTIC',
+      disclaimer: 'Illustrative seasonal tendencies — not computed from historical price data. Do not trade on these numbers.',
+    });
   } catch (err) {
     return NextResponse.json({
       months: buildSeasonalCalendar(),

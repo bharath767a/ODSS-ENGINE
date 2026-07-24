@@ -76,9 +76,9 @@ export interface MarketBriefResponse {
   bankNiftyChangePct: number;
   vix: number;
   vixChange: number;
-  sensexClose: number;
-  sensexChange: number;
-  sensexChangePct: number;
+  sensexClose: number | null;   // REAL ^BSESN or null (never approximated)
+  sensexChange: number | null;
+  sensexChangePct: number | null;
   breadth: { advances: number; declines: number; ratio: number };
   aiSummary: string;
   aiPrediction: string;
@@ -547,10 +547,23 @@ export async function GET(req: NextRequest) {
     const bankNiftyChange = bankNifty.ltp - bankNifty.prevClose;
     const bankNiftyChangePct = bankNifty.changePct;
 
-    // Sensex ≈ NIFTY × ~13.5 (approximate; BSE Sensex not directly fetched)
-    const sensexClose = niftyClose * 13.52;
-    const sensexChange = niftyChange * 13.52;
-    const sensexChangePct = niftyChangePct;
+    // REAL SENSEX (^BSESN via Yahoo). If the fetch fails we report null and
+    // the UI shows "unavailable" — never a NIFTY-ratio approximation.
+    let sensexClose: number | null = null;
+    let sensexChange: number | null = null;
+    let sensexChangePct: number | null = null;
+    try {
+      const res = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/%5EBSESN?range=1d&interval=1d', {
+        headers: { 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(4000),
+      });
+      const jj: any = await res.json();
+      const meta = jj?.chart?.result?.[0]?.meta;
+      if (meta?.regularMarketPrice > 0 && meta?.chartPreviousClose > 0) {
+        sensexClose = meta.regularMarketPrice;
+        sensexChange = meta.regularMarketPrice - meta.chartPreviousClose;
+        sensexChangePct = (sensexChange / meta.chartPreviousClose) * 100;
+      }
+    } catch { /* honest null */ }
 
     const vixChange = vix - 14.5; // baseline ~14.5 reference
 
@@ -619,35 +632,46 @@ export async function GET(req: NextRequest) {
 
     const topSectors = [...sectorPerformance];
 
-    // ---- FII/DII summary (derived from regime + breadth; realistic) ----
-    const netBias = niftyChangePct >= 0 ? 1 : -1;
-    const magnitude = Math.min(
-      2000,
-      Math.abs(niftyChangePct) * 800 + Math.abs(breadth.advanceDeclineRatio - 1) * 600,
-    );
-    const fiiNetCrore = Math.round(netBias * (magnitude + 200) * (regime === 'SELLOFF' ? 1.4 : 1));
-    const diiNetCrore = Math.round(-netBias * (magnitude * 0.7 + 150)); // DII typically counterbalances FII
-    const fiiBuyCrore = Math.abs(fiiNetCrore) + 5000 + Math.round(Math.random() * 800);
-    const fiiSellCrore = fiiBuyCrore - fiiNetCrore;
-    const diiBuyCrore = Math.abs(diiNetCrore) + 4500 + Math.round(Math.random() * 700);
-    const diiSellCrore = diiBuyCrore - diiNetCrore;
-    const fiiDiiSummary = {
-      fiiBuyCrore,
-      fiiSellCrore,
-      fiiNetCrore,
-      diiBuyCrore,
-      diiSellCrore,
-      diiNetCrore,
-      netFlowCrore: fiiNetCrore + diiNetCrore,
-      interpretation:
-        fiiNetCrore > 0 && diiNetCrore > 0
-          ? 'Both FII and DII net buyers — strong institutional support'
-          : fiiNetCrore < 0 && diiNetCrore > 0
-            ? 'FII selling absorbed by DII buying — domestic support cushioning outflow'
-            : fiiNetCrore > 0 && diiNetCrore < 0
-              ? 'FII buying offset by DII profit-booking — mixed institutional signal'
-              : 'Both FII and DII net sellers — institutional distribution, raise cash',
-    };
+    // ---- FII/DII: REAL NSE provisional cash-market numbers via the bridge.
+    // Previously these were FABRICATED from regime + Math.random(). Now: real
+    // or null — the UI shows "feed unavailable" instead of invented crores.
+    let fiiDiiSummary: any = null;
+    try {
+      // Same auth the bridge provider uses (bridge-config.json in DATA_DIR).
+      let bridgeUrl = process.env.ODSS_BRIDGE_URL || 'http://localhost:8765';
+      let bridgeToken = process.env.ODSS_BRIDGE_TOKEN || 'odss-bridge-secure-2026';
+      try {
+        const bc = JSON.parse(readFileSync(dataPath('bridge-config.json'), 'utf-8'));
+        if (bc?.url) bridgeUrl = String(bc.url).replace(/\/$/, '');
+        if (bc?.token) bridgeToken = bc.token;
+      } catch { /* defaults */ }
+      const fr = await fetch(`${bridgeUrl}/fiidii`, { headers: { 'X-Bridge-Token': bridgeToken }, signal: AbortSignal.timeout(5000) });
+      const fj: any = await fr.json();
+      const d = fj?.data;
+      if (d?.fii || d?.dii) {
+        const fiiNetCrore = Math.round(d.fii?.netCrore ?? 0);
+        const diiNetCrore = Math.round(d.dii?.netCrore ?? 0);
+        fiiDiiSummary = {
+          fiiBuyCrore: Math.round(d.fii?.buyCrore ?? 0),
+          fiiSellCrore: Math.round(d.fii?.sellCrore ?? 0),
+          fiiNetCrore,
+          diiBuyCrore: Math.round(d.dii?.buyCrore ?? 0),
+          diiSellCrore: Math.round(d.dii?.sellCrore ?? 0),
+          diiNetCrore,
+          netFlowCrore: fiiNetCrore + diiNetCrore,
+          asOf: d.fii?.date ?? d.dii?.date ?? null,
+          source: 'NSE (provisional)',
+          interpretation:
+            fiiNetCrore > 0 && diiNetCrore > 0
+              ? 'Both FII and DII net buyers — strong institutional support'
+              : fiiNetCrore < 0 && diiNetCrore > 0
+                ? 'FII selling absorbed by DII buying — domestic support cushioning outflow'
+                : fiiNetCrore > 0 && diiNetCrore < 0
+                  ? 'FII buying offset by DII profit-booking — mixed institutional signal'
+                  : 'Both FII and DII net sellers — institutional distribution, raise cash',
+        };
+      }
+    } catch { /* honest null */ }
 
     // ---- AI summary + prediction ----
     const ai = await buildAISummary(type, {

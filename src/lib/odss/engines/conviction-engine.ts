@@ -48,6 +48,8 @@ import type {
 import { getFundamentalProvider } from '../fundamentals/provider';
 import { analyzeFundamentals } from '../fundamentals/analyzer';
 import { OI_PACK } from '../oi-knowledge-pack';
+import { getQuote } from '../simulator/market-simulator';
+import { getRangeExhaustion } from './range-profile';
 
 export type EntrySignal = 'ENTER_NOW' | 'WAIT' | 'AVOID';
 
@@ -366,7 +368,7 @@ function optionChainHealth(dir: Direction, oc: OptionChainEngineOutput): number 
  * High = fresh move with room to target. Low = exhausted / at a wall / already run.
  */
 function roomToRun(
-  dir: Direction, ltp: number, changePct: number,
+  symbol: string, dir: Direction, ltp: number, changePct: number,
   t: TechnicalEngineOutput, oc: OptionChainEngineOutput,
 ): { score: number; notes: string[] } {
   const notes: string[] = [];
@@ -433,6 +435,23 @@ function roomToRun(
   } else {
     add(75, 0.6); // no visible wall in-path → assume room
   }
+
+  // 4) RANGE EXHAUSTION — how much of THIS symbol's typical day is already
+  // used? (per-symbol percentiles from real 6-month history). A stock that has
+  // already travelled 90% of its usual day range has little left to give,
+  // whatever the setup says — the user's TVSMOTOR insight, made statistical.
+  try {
+    const q = getQuote(symbol);
+    const ex = q ? getRangeExhaustion(symbol, q.high || q.dayHigh, q.low || q.dayLow, q.prevClose) : null;
+    if (ex) {
+      let r: number;
+      if (ex.ratio <= 0.45) { r = 92; notes.push(`Used only ${Math.round(ex.ratio * 100)}% of its typical day range (${ex.typicalP80}%) — room by history`); }
+      else if (ex.ratio <= 0.7) r = 75;
+      else if (ex.ratio <= 0.9) { r = 45; notes.push(`Used ${Math.round(ex.ratio * 100)}% of its typical day range — limited left`); }
+      else { r = 12; notes.push(`Day range ${ex.usedPct}% ≈ its typical max (${ex.typicalP80}%) — move likely exhausted`); }
+      add(r, 1.15);
+    }
+  } catch { /* no profile → no adjustment */ }
 
   // 4) How much has it already moved today? Big move already = less left + IV rich.
   const absMove = Math.abs(changePct);
@@ -676,7 +695,7 @@ export function runConvictionEngine(
     const ocH = optionChainHealth(direction, rec.optionChain);
     const fund = getFundamentalScore(opp.symbol, now);
     const fundFit = fundamentalFit(direction, fund.total);
-    const room = roomToRun(direction, price, changePct, rec.technical, rec.optionChain);
+    const room = roomToRun(opp.symbol, direction, price, changePct, rec.technical, rec.optionChain);
     const stability = calculateStability(opp.symbol);
 
     // ── Who's in control (real order flow) → direction-aligned fit 0-100 ──

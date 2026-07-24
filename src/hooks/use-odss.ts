@@ -33,6 +33,7 @@ export interface ODSSState {
   ocConfluence: Record<string, any>;
   indexControl: Record<string, any>;
   pickStats: any | null;
+  morningPlaybook: any | null;
   squeezes: any[];
   completedSqueezes: any[];
   confluence: any[] | null;
@@ -70,6 +71,7 @@ const initialState: ODSSState = {
   ocConfluence: {},
   indexControl: {},
   pickStats: null,
+  morningPlaybook: null,
   squeezes: [],
   completedSqueezes: [],
   confluence: null,
@@ -105,6 +107,7 @@ function startPolling() {
         topRecommendations: s.topRecommendations ?? currentState.topRecommendations,
         indexControl: s.indexControl ?? currentState.indexControl,
         pickStats: s.pickStats ?? currentState.pickStats,
+        morningPlaybook: s.morningPlaybook ?? currentState.morningPlaybook,
         ocConfluence: s.ocConfluence ?? currentState.ocConfluence,
         squeezes: s.squeezes ?? currentState.squeezes,
         completedSqueezes: s.completedSqueezes ?? currentState.completedSqueezes,
@@ -185,6 +188,7 @@ function connect() {
       ocConfluence: data.ocConfluence ?? currentState.ocConfluence,
       indexControl: data.indexControl ?? currentState.indexControl,
       pickStats: data.pickStats ?? currentState.pickStats,
+      morningPlaybook: data.morningPlaybook ?? currentState.morningPlaybook,
       squeezes: data.squeezes ?? currentState.squeezes,
       completedSqueezes: data.completedSqueezes ?? currentState.completedSqueezes,
       decisionLog: data.decisionLog ?? currentState.decisionLog,
