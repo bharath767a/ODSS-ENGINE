@@ -1,6 +1,7 @@
 {
-  "clientId": "1111422127",
-  "apiKey": "1cb52aec",
-  "apiSecret": "0991225a-b1d2-4dd1-81e9-d12452871943",
-  "accessToken": "REPLACE_WITH_DAILY_ACCESS_TOKEN"
+  "_README": "TEMPLATE ONLY — never put real values in this file (it is committed to git). Copy it to dhan-creds.json (git-ignored) and fill that one in. See DHAN-SETUP.md.",
+  "clientId": "YOUR_DHAN_CLIENT_ID",
+  "apiKey": "YOUR_DHAN_API_KEY",
+  "apiSecret": "YOUR_DHAN_API_SECRET",
+  "accessToken": "PASTE_TODAYS_ACCESS_TOKEN_HERE"
 }
