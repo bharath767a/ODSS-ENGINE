@@ -51,6 +51,7 @@ interface WallTrack {
   status: SqueezeStatus;
   detectedAt: number; triggeredAt: number; statusAt: number;
   stableScans: number;           // consecutive scans with no unwinding (→ DONE)
+  pressScans: number;            // consecutive scans genuinely pressing the wall
   lastPremium: number;
 }
 
@@ -75,7 +76,10 @@ let loaded = false, lastSave = 0;
 
 function load(): void {
   if (loaded) return; loaded = true;
-  try { const d = JSON.parse(readFileSync(STATE_FILE, 'utf-8')); for (const [k, v] of Object.entries(d.tracks || {})) tracks.set(k, v as WallTrack); } catch {}
+  try {
+    const d = JSON.parse(readFileSync(STATE_FILE, 'utf-8'));
+    for (const [k, v] of Object.entries(d.tracks || {})) { const t = v as WallTrack; t.pressScans ??= 0; tracks.set(k, t); }
+  } catch {}
   try { const l = JSON.parse(readFileSync(LOG_FILE, 'utf-8')); if (Array.isArray(l.items)) completed = l.items; } catch {}
 }
 function save(now: number): void {
@@ -135,13 +139,18 @@ export function updateSqueeze(symbol: string, chain: OptionChain, isIndex = fals
   // Reset the track if the wall moved to a different strike (new setup).
   let t = tracks.get(symbol);
   if (!t || t.strike !== wall || t.type !== type) {
-    t = { type, strike: wall, peakOI: wallOI, lastOI: wallOI, premiumStart: premium, peakPremium: premium, lastPremium: premium, volBaseline: vol || 1, volSamples: 1, status: 'NONE', detectedAt: 0, triggeredAt: 0, statusAt: now, stableScans: 0 };
+    t = { type, strike: wall, peakOI: wallOI, lastOI: wallOI, premiumStart: premium, peakPremium: premium, lastPremium: premium, volBaseline: vol || 1, volSamples: 1, status: 'NONE', detectedAt: 0, triggeredAt: 0, statusAt: now, stableScans: 0, pressScans: 0 };
     tracks.set(symbol, t);
   }
   t.peakOI = Math.max(t.peakOI, wallOI);
   t.peakPremium = Math.max(t.peakPremium, premium);
-  t.volBaseline = (t.volBaseline * t.volSamples + vol) / (t.volSamples + 1);
-  t.volSamples = Math.min(t.volSamples + 1, 20);
+  // Baseline volume is learned ONLY before the squeeze fires (NONE/FORMING).
+  // Averaging the surge into its own baseline made volumeMult decay and pushed
+  // live squeezes into PEAKING prematurely.
+  if (t.status === 'NONE' || t.status === 'FORMING') {
+    t.volBaseline = (t.volBaseline * t.volSamples + vol) / (t.volSamples + 1);
+    t.volSamples = Math.min(t.volSamples + 1, 20);
+  }
 
   const proximityPct = (Math.abs(spot - wall) / spot) * 100;
   const oiUnwindPct = t.peakOI > 0 ? (t.peakOI - wallOI) / t.peakOI : 0;
@@ -158,9 +167,14 @@ export function updateSqueeze(symbol: string, chain: OptionChain, isIndex = fals
   const stillUnwinding = (t.lastOI - wallOI) > t.peakOI * 0.003;   // OI dropping THIS scan
   const premRising = premium > t.lastPremium;
   const premFading = premium <= t.peakPremium * 0.97;              // off its peak
-  // Confirmed short covering: broke the wall + real cumulative unwinding + a
-  // premium jump or volume surge (quality gate — never fires on a thin wall).
-  const confirmed = broke && oiUnwindPct >= UNWIND_TRIGGER && (premiumChangePct > 8 || volumeMult >= 1.8);
+  // The wall row's OWN quadrant must read SHORT COVERING: OI leaving the strike
+  // WHILE its premium rises. OI down + premium DOWN is longs dumping (long
+  // unwinding) — the classic false squeeze that volume alone cannot filter.
+  const wallCovering = (row.oiChange ?? 0) < 0 && ((row.ltpChange ?? 0) > 0 || premRising);
+  // Confirmed short covering: broke the wall + real cumulative unwinding + the
+  // premium itself confirming + (volume surge OR deep unwind) + covering quadrant.
+  const confirmed = broke && oiUnwindPct >= UNWIND_TRIGGER && wallCovering
+    && premiumChangePct >= 6 && (volumeMult >= 1.5 || oiUnwindPct >= 0.06);
 
   if (t.status === 'DONE') {
     status = 'DONE'; // stays DONE until the wall/price situation resets (track reset above)
@@ -174,10 +188,13 @@ export function updateSqueeze(symbol: string, chain: OptionChain, isIndex = fals
     if (t.stableScans >= 2 && premFading) { setStatus('DONE'); logCompleted(symbol, t, now); }
     else setStatus('PEAKING');
   } else if (proximityPct <= PROX_FORMING * 100 && !oiRising) {
-    if (t.status === 'NONE') t.detectedAt = now;
-    setStatus('FORMING');
+    t.pressScans++;
+    if (t.pressScans >= 2) {                    // ~2 chain refreshes of genuine pressing
+      if (t.status === 'NONE') t.detectedAt = now;
+      setStatus('FORMING');
+    }
   } else {
-    setStatus('NONE'); t.detectedAt = 0;
+    setStatus('NONE'); t.detectedAt = 0; t.pressScans = 0;
   }
   t.lastOI = wallOI;
   t.lastPremium = premium;
@@ -208,7 +225,9 @@ export function updateSqueeze(symbol: string, chain: OptionChain, isIndex = fals
     ivNow: +iv.toFixed(1), volumeMult: +volumeMult.toFixed(1), deltaNow: +delta.toFixed(2),
     confidence,
     suggestedStrike, stopLoss, target,
-    action: type === 'CALL' ? `BUY ${suggestedStrike} CE` : `BUY ${suggestedStrike} PE`,
+    action: status === 'LIVE' && premiumChangePct > 40
+      ? `LATE (+${premiumChangePct.toFixed(0)}% already) — small size only: ${suggestedStrike} ${type === 'CALL' ? 'CE' : 'PE'}`
+      : type === 'CALL' ? `BUY ${suggestedStrike} CE` : `BUY ${suggestedStrike} PE`,
     detectedAt: t.detectedAt, triggeredAt: t.triggeredAt, statusAt: t.statusAt,
     note: statusNote(status, type, wall, oiUnwindPct, premiumChangePct),
   };

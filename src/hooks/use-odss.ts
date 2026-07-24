@@ -32,6 +32,7 @@ export interface ODSSState {
   takenTrades: any[];
   ocConfluence: Record<string, any>;
   indexControl: Record<string, any>;
+  pickStats: any | null;
   squeezes: any[];
   completedSqueezes: any[];
   confluence: any[] | null;
@@ -68,6 +69,7 @@ const initialState: ODSSState = {
   takenTrades: [],
   ocConfluence: {},
   indexControl: {},
+  pickStats: null,
   squeezes: [],
   completedSqueezes: [],
   confluence: null,
@@ -102,6 +104,7 @@ function startPolling() {
         activeTrade: s.activeTrade ?? currentState.activeTrade,
         topRecommendations: s.topRecommendations ?? currentState.topRecommendations,
         indexControl: s.indexControl ?? currentState.indexControl,
+        pickStats: s.pickStats ?? currentState.pickStats,
         ocConfluence: s.ocConfluence ?? currentState.ocConfluence,
         squeezes: s.squeezes ?? currentState.squeezes,
         completedSqueezes: s.completedSqueezes ?? currentState.completedSqueezes,
@@ -181,6 +184,7 @@ function connect() {
       topRecommendations: data.topRecommendations ?? currentState.topRecommendations,
       ocConfluence: data.ocConfluence ?? currentState.ocConfluence,
       indexControl: data.indexControl ?? currentState.indexControl,
+      pickStats: data.pickStats ?? currentState.pickStats,
       squeezes: data.squeezes ?? currentState.squeezes,
       completedSqueezes: data.completedSqueezes ?? currentState.completedSqueezes,
       decisionLog: data.decisionLog ?? currentState.decisionLog,

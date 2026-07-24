@@ -250,6 +250,21 @@ export function updateOCConfluence(symbol: string, chain: OptionChain, direction
   return result;
 }
 
+/**
+ * ATM-IV spike over the last hour (%). An IV jump means option premiums have
+ * repriced UP — a buyer entering now pays for volatility that can mean-revert
+ * against them even when direction is right. null until history exists.
+ */
+export function getIVSpikePct(symbol: string): number | null {
+  load();
+  const snaps = history.get(symbol);
+  if (!snaps || snaps.length < 2) return null;
+  const cur = snaps[snaps.length - 1];
+  const prev = lookback(snaps, TF_MS['1h']);
+  if (!prev || prev.atmIV <= 4 || cur.atmIV <= 0) return null; // degenerate IVs = no read
+  return Math.round(((cur.atmIV - prev.atmIV) / prev.atmIV) * 100);
+}
+
 export function getOCConfluence(symbol: string): OCConfluence | null {
   return latest.get(symbol) ?? null;
 }

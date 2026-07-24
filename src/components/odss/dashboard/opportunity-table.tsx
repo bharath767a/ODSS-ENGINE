@@ -13,7 +13,7 @@ import type { Recommendation } from '@/lib/odss/types';
 import { VIEW_ONLY } from '@/lib/view-only';
 
 function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) => void }) {
-  const { topRecommendations, liveQuotes, conviction, takenTrades, confluence, indexControl, nifty } = useODSS();
+  const { topRecommendations, liveQuotes, conviction, takenTrades, confluence, indexControl, nifty, pickStats } = useODSS();
   const niftyControl = indexControl?.['NIFTY'] ?? null;
   const recs = topRecommendations;
   const convictionPicks = conviction?.convictionPicks ?? [];
@@ -39,11 +39,16 @@ function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) 
     return s;
   }, [takenTrades]);
 
+  // Actionable setups float to the top; the background book keeps scanning
+  // underneath. BUY NOW > CONSIDER > WAIT > SKIP, stable within each tier.
+  const actionRank = (p: any) => p.plainAction === 'BUY NOW' ? 0 : p.plainAction === 'CONSIDER' ? 1 : p.plainAction === 'SKIP' ? 3 : 2;
+  const actionableFirst = (picks: any[]) => picks.slice().sort((a, b) => actionRank(a) - actionRank(b));
+
   // Build CE and PE lists. v3: if the engine emits stable per-side books, use
   // them verbatim (already stable + best-2 flagged). Otherwise fall back to the
   // legacy derivation from convictionPicks + watchlist + topRecommendations.
   const cePicks = useMemo(() => {
-    if (stableCE && stableCE.length > 0) return stableCE.slice(0, 5);
+    if (stableCE && stableCE.length > 0) return actionableFirst(stableCE.slice(0, 5));
     const ce = convictionPicks.filter((p: any) => p.direction === 'CE');
     const ceWatch = watchlist.filter((p: any) => p.direction === 'CE');
     const ceRecs = recs.filter((r) => r.direction === 'CE').map(r => ({
@@ -72,7 +77,7 @@ function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) 
   }, [stableCE, convictionPicks, watchlist, recs, liveQuotes]);
 
   const pePicks = useMemo(() => {
-    if (stablePE && stablePE.length > 0) return stablePE.slice(0, 5);
+    if (stablePE && stablePE.length > 0) return actionableFirst(stablePE.slice(0, 5));
     const pe = convictionPicks.filter((p: any) => p.direction === 'PE');
     const peWatch = watchlist.filter((p: any) => p.direction === 'PE');
     const peRecs = recs.filter((r) => r.direction === 'PE').map(r => ({
@@ -102,6 +107,22 @@ function OpportunityTableInner({ onSelect }: { onSelect?: (rec: Recommendation) 
   // ALWAYS show organized view
   return (
     <div className="space-y-3">
+      {/* HONESTY SCOREBOARD — the engine grades its own displayed signals */}
+      {pickStats?.today && pickStats.today.signals > 0 && (
+        <div className="flex items-center gap-2 rounded-md border border-border/40 bg-card/40 px-3 py-1.5 font-mono text-[10px]">
+          <Target className="h-3 w-3 text-info" />
+          <span className="font-bold tracking-wide text-muted-foreground">TODAY'S SIGNALS</span>
+          <span className="text-foreground">{pickStats.today.signals}</span>
+          <span className="text-bull">✓ {pickStats.today.targetHit} hit 1R</span>
+          <span className="text-bear">✗ {pickStats.today.stopped} stopped</span>
+          {pickStats.today.open > 0 && <span className="text-warn">{pickStats.today.open} running</span>}
+          {pickStats.today.hitRatePct !== null && (
+            <span className={pickStats.today.hitRatePct >= 60 ? 'font-bold text-bull' : pickStats.today.hitRatePct >= 40 ? 'font-bold text-warn' : 'font-bold text-bear'}>
+              {pickStats.today.hitRatePct}% hit rate
+            </span>
+          )}
+        </div>
+      )}
       {/* NIFTY 50 — Permanent Benchmark Tracker (ALWAYS shows, even without confluence) */}
       <Card className="border-info/30 bg-card/50 backdrop-blur-sm">
         <CardHeader className="pb-2">
@@ -363,6 +384,12 @@ function SimplePickCard({ pick, idx, q, rec, isTaken, onSelect, pickConfluence }
             {pick.plainAction === 'BUY NOW' ? '✅ BUY NOW' : pick.plainAction === 'CONSIDER' ? '🤔 CONSIDER' : pick.plainAction === 'WAIT' ? '⏳ WAIT' : '❌ SKIP'}
           </span>
           <span className="ml-1 text-foreground/85">— {pick.plainMessage}</span>
+          {pick.recommendedStrike ? (
+            <div className="mt-1 font-mono text-[10px] font-bold text-foreground/90">
+              → Trade: <span className="text-info">{pick.recommendedStrike} {pick.direction}</span>
+              {pick.recommendedDelta ? <span className="text-muted-foreground"> (Δ{pick.recommendedDelta}{pick.recommendedPremium ? `, ₹${pick.recommendedPremium}` : ''})</span> : null}
+            </div>
+          ) : null}
         </div>
       )}
       <div className="flex items-center justify-between gap-2">

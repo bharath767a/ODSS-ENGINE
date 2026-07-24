@@ -36,6 +36,9 @@ import { STOCKS } from '../../src/lib/odss/universe';
 import { updateSqueeze, getActiveSqueezes, getSqueezeFor, getCompletedSqueezes, resetSqueezeLog } from '../../src/lib/odss/engines/squeeze-detector';
 import { recordNewsShocks } from '../../src/lib/odss/news/shocks-store';
 import { getMarketSession, shouldEngineBeActive, shouldPollRealData } from '../../src/lib/odss/market-session';
+import { getIVSpikePct } from '../../src/lib/odss/engines/oc-confluence';
+import { applyPlainGuidance } from '../../src/lib/odss/engines/conviction-engine';
+import { recordDisplayedPicks, updateOutcomes, closeOutcomesForDay, getPickStats } from '../../src/lib/odss/engines/pick-outcomes';
 import { dataPath, ensureDataDir } from '../../src/lib/odss/data-dir';
 import type { Direction } from '../../src/lib/odss/types';
 
@@ -329,6 +332,7 @@ setInterval(() => {
     if (session.isOpen || session.isPreOpen) return;   // only after close
     if (eodDoneDate === istDayKey()) return;            // already done today
     if (!session.isPostClose) return;                    // wait until actually post-close
+    try { closeOutcomesForDay(); } catch {}
     runEODScan('auto post-close');
   } catch { /* ignore */ }
 }, 60_000);
@@ -360,9 +364,52 @@ function enrichWithOCConfluence(store: any): void {
         p.ocScore = oc.ocScore; p.ocEntrySignal = oc.entrySignal; p.ocExitSignal = oc.exitSignal;
         p.oiAction = oc.oiAction; p.ocNotes = oc.notes; p.atmDelta = oc.atmDelta;
         // OC can veto a technical ENTER, or promote a WAIT when it strongly
-        // confirms and there is still room (and no negative news).
-        if (p.entrySignal === 'ENTER_NOW' && oc.entrySignal === 'AVOID') p.entrySignal = 'WAIT';
-        else if (p.entrySignal === 'WAIT' && oc.entrySignal === 'ENTER' && (p.roomScore ?? 0) >= 50 && p.newsMomentum !== 'NEGATIVE') p.entrySignal = 'ENTER_NOW';
+        // confirms — but a promote must clear the SAME hard gates as a native
+        // ENTER (grade, readable flow, room, news), or the sufficiency /
+        // theta / pin gates upstream would be bypassed through this side door.
+        let mutated = false;
+        if (p.entrySignal === 'ENTER_NOW' && oc.entrySignal === 'AVOID') {
+          p.entrySignal = 'WAIT';
+          p.entrySignalReason = 'the option chain turned against this in the last few minutes — wait';
+          mutated = true;
+        } else if (
+          p.entrySignal === 'WAIT' && oc.entrySignal === 'ENTER'
+          && (p.grade === 'A+' || p.grade === 'A')
+          && p.controlReadable !== false
+          && (p.roomScore ?? 0) >= 50 && p.newsMomentum !== 'NEGATIVE'
+        ) { p.entrySignal = 'ENTER_NOW'; p.entrySignalReason = 'chain + delta just confirmed the move'; mutated = true; }
+        // IV-spike honesty: premiums that just repriced up are a bad buy even
+        // when the direction is right. ≥25% in an hour → warn; ≥45% → stand down.
+        try {
+          const spike = getIVSpikePct(p.symbol);
+          if (spike !== null && spike >= 25 && (p.entrySignal === 'ENTER_NOW' || p.plainAction === 'BUY NOW')) {
+            p.ivCaution = true;
+            p.ivCautionReason = `ATM IV +${spike}% in the last hour — premiums expensive`;
+            if (spike >= 45) { p.entrySignal = 'WAIT'; p.entrySignalReason = `option premiums spiked +${spike}% — you would overpay; wait for IV to settle`; }
+            mutated = true;
+          }
+        } catch { /* no IV history yet */ }
+        // The layman banner must NEVER contradict the signal it stands on.
+        if (mutated) { try { applyPlainGuidance(p); } catch {} }
+        // Which strike to actually buy: the 0.35–0.55 |delta| sweet spot
+        // (real directional exposure without deep-OTM lottery pricing),
+        // liquidity-checked. Only on actionable picks.
+        if (p.plainAction === 'BUY NOW' || p.plainAction === 'CONSIDER') {
+          try {
+            const chain = getOptionChain(p.symbol);
+            if (chain) {
+              const rows = chain.strikes
+                .filter((r: any) => r.type === p.direction && Math.abs(r.delta ?? 0) >= 0.32 && Math.abs(r.delta ?? 0) <= 0.58 && (r.oi ?? 0) > 0 && (r.ltp ?? 0) > 0)
+                .sort((a: any, b: any) => Math.abs(Math.abs(a.delta) - 0.45) - Math.abs(Math.abs(b.delta) - 0.45) || (b.volume ?? 0) - (a.volume ?? 0));
+              const best = rows[0];
+              if (best) {
+                p.recommendedStrike = best.strike;
+                p.recommendedDelta = +Math.abs(best.delta).toFixed(2);
+                p.recommendedPremium = +best.ltp.toFixed(2);
+              }
+            }
+          } catch { /* no chain right now */ }
+        }
       }
     };
     if (conv) { enrich(conv.cePicks); enrich(conv.pePicks); enrich(conv.primePicks); enrich(conv.convictionPicks); enrich(conv.watchlist); }
@@ -568,6 +615,16 @@ setInterval(async () => {
     // ON TOP OF the technical setup. Only fires when real chains are flowing.
     enrichWithOCConfluence(store);
 
+    // ─── OUTCOME SCOREBOARD (the engine grades its own displayed signals) ───
+    try {
+      const conv: any = store.conviction;
+      if (conv) recordDisplayedPicks([...(conv.cePicks ?? []), ...(conv.pePicks ?? [])]);
+      const qmap: Record<string, number> = {};
+      for (const q of getAllQuotes()) qmap[q.symbol] = q.ltp;
+      updateOutcomes(qmap);
+      (store as any).pickStats = getPickStats();
+    } catch { /* non-critical */ }
+
     // Persist news-shock events with timestamps (deduped) for the Opportunities tab.
     try { recordNewsShocks((store.conviction as any)?.newsShockPicks); } catch {}
 
@@ -597,6 +654,7 @@ setInterval(async () => {
         completedSqueezes: (store as any).completedSqueezes || [],
         ocConfluence,
         indexControl,
+        pickStats: (store as any).pickStats || null,
         decisionLog: store.decisionLog.slice(0, 50),
         completedTrades: store.completedTrades.slice(0, 20),
         lastScanAt: store.lastScanAt,

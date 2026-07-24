@@ -49,6 +49,57 @@ import { analyzeFundamentals } from '../fundamentals/analyzer';
 import { OI_PACK } from '../oi-knowledge-pack';
 
 export type EntrySignal = 'ENTER_NOW' | 'WAIT' | 'AVOID';
+
+/**
+ * SINGLE SOURCE OF TRUTH for the layman guidance. The market service mutates
+ * entrySignal after the fact (OC-confluence veto/promote, IV-spike caution) —
+ * it MUST call this again so the big BUY NOW / WAIT banner can never contradict
+ * the signal it stands on. Reads only fields that live on the pick itself.
+ */
+export function applyPlainGuidance(p: ConvictionPick): void {
+  const opt = p.direction === 'CE' ? 'Call' : 'Put';
+  const dirWord = p.direction === 'CE' ? 'UP' : 'DOWN';
+  const who = p.controller === 'BUYERS' ? 'Big buyers are stepping in'
+    : p.controller === 'SELLERS' ? 'Big sellers are stepping in'
+    : 'Buyers and sellers are evenly matched';
+  const roomScore = p.roomScore ?? 50;
+  const roomWord = roomScore >= 60 ? 'plenty of room left to move' : roomScore >= 45 ? 'some room left' : 'little room left';
+  const newsAligned = p.direction === 'CE' ? p.newsBoost : -p.newsBoost;
+  const an = /^[AEIOU]/.test(p.symbol) ? 'an' : 'a';
+  if ((p.grade === 'A+' || p.grade === 'A') && p.entrySignal === 'ENTER_NOW' && !p.trap) {
+    if (p.ivCaution) {
+      // Setup is right but the premium just got expensive — honesty about entry price.
+      p.plainAction = 'CONSIDER';
+      p.plainMessage = `${p.symbol} ${opt} setup is strong, BUT option premiums just got expensive (${p.ivCautionReason ?? 'IV spiked'}). If you take it, use a smaller size.`;
+      return;
+    }
+    p.plainAction = 'BUY NOW';
+    p.plainMessage = `Buy ${an} ${p.symbol} ${opt}. ${who} to push it ${dirWord}, and there is ${roomWord}. ${p.grade === 'A+' ? 'Very high' : 'High'} confidence — after you buy, the engine tells you exactly when to exit.`;
+  } else if (p.entrySignal === 'ENTER_NOW') {
+    p.plainAction = 'CONSIDER';
+    p.plainMessage = `A ${p.symbol} ${opt} is ready, but only moderate confidence (grade ${p.grade}). Take a smaller position, or wait for a clearer one.`;
+  } else if (p.entrySignal === 'WAIT') {
+    const why = p.controlReadable === false
+      ? `the big-money option activity hasn't shown up yet — the engine won't guess. Give it a few more minutes`
+      : roomScore < 45 ? `it has already moved a lot — wait for a small ${p.direction === 'CE' ? 'dip' : 'bounce'} before buying`
+      : p.entrySignalReason && p.entrySignalReason !== 'building — wait for confirmation' ? p.entrySignalReason
+      : `it is still forming — wait for it to confirm`;
+    p.plainAction = 'WAIT';
+    p.plainMessage = `Don't buy yet. This ${opt} looks promising but ${why}.`;
+  } else {
+    const why = p.trap ? `the option activity is going the OTHER way (trap risk)`
+      : newsAligned <= -10 ? `the news is pushing the stock the OTHER way`
+      : `the setup isn't clean`;
+    p.plainAction = 'SKIP';
+    p.plainMessage = `Skip this one — ${why}. There will be better opportunities.`;
+  }
+}
+
+/** Minutes since IST midnight — the option buyer's clock (theta gates). */
+function istMinutes(now = Date.now()): number {
+  const t = new Date(now + 5.5 * 3600_000);
+  return t.getUTCHours() * 60 + t.getUTCMinutes();
+}
 export type StabilityClass = 'STABLE' | 'MODERATE' | 'VOLATILE';
 
 export interface ConvictionPick {
@@ -80,6 +131,8 @@ export interface ConvictionPick {
   // ── plain-English guidance (for non-traders) ──
   plainAction?: 'BUY NOW' | 'CONSIDER' | 'WAIT' | 'SKIP' | 'WATCH';
   plainMessage?: string;       // one clear human sentence: what to do & why
+  // ── which strike to actually buy (0.35-0.55 |delta| band, liquidity-checked) ──
+  recommendedStrike?: number; recommendedDelta?: number; recommendedPremium?: number;
   primeScore: number;          // 0-100 actionability (best-to-take-now)
   isPrime: boolean;            // one of the top-2 to take now
   whyBest: string;             // one-line rationale when isPrime
@@ -593,6 +646,7 @@ export function runConvictionEngine(
 ): ConvictionOutput {
   loadState();
   const now = Date.now();
+  const istMin = istMinutes(now);
 
   // ── Step 1: score every opportunity that has a full recommendation ──
   const topSymbols = new Set(opportunities.slice(0, 12).map(o => o.symbol));
@@ -680,6 +734,19 @@ export function runConvictionEngine(
       // (typically the first ~20 minutes of the session).
       entrySignal = 'WAIT';
       entrySignalReason = `order flow still building (${control.dataQuality}% of a readable sample) — wait for the chain to confirm`;
+    } else if (control?.gammaRegime === 'PINNED') {
+      // Buying options into a gamma pin = paying theta while price is glued to
+      // the magnet strike. Wait for the break — that's when the move pays.
+      entrySignal = 'WAIT';
+      entrySignalReason = `price is stuck at a magnet level (${control.pinStrike}) — heavy OI is pinning it; wait for the break`;
+    } else if (istMin >= 15 * 60) {
+      // Last 30 min: time decay dominates any intraday option buy.
+      entrySignal = 'WAIT';
+      entrySignalReason = 'too late in the day to start a new option buy — time decay is too strong now';
+    } else if (istMin >= 14 * 60 + 30 && !(conviction >= 74 && controlFit >= OI_PACK.grade.aPlusControl)) {
+      // After 14:30 the bar rises: only exceptional setups beat the theta burn.
+      entrySignal = 'WAIT';
+      entrySignalReason = "it's late in the day — option prices decay fast now, only exceptional setups qualify";
     } else if (conviction >= 68 && room.score >= 50 && controlFit >= OI_PACK.grade.control && stability.class !== 'VOLATILE') {
       entrySignal = 'ENTER_NOW'; entrySignalReason = 'flow + room aligned — move still ahead';
     } else if (room.score < 40) {
@@ -713,36 +780,6 @@ export function runConvictionEngine(
       : gradeScore >= 3 ? 'B'
       : 'C';
 
-    // ── PLAIN-ENGLISH GUIDANCE (for someone with zero trading knowledge) ──
-    const opt = direction === 'CE' ? 'Call' : 'Put';
-    const dirWord = direction === 'CE' ? 'UP' : 'DOWN';
-    const who = control?.controller === 'BUYERS' ? 'Big buyers are stepping in'
-      : control?.controller === 'SELLERS' ? 'Big sellers are stepping in'
-      : 'Buyers and sellers are evenly matched';
-    const roomWord = room.score >= 60 ? 'plenty of room left to move' : room.score >= 45 ? 'some room left' : 'little room left';
-    let plainAction: ConvictionPick['plainAction'];
-    let plainMessage: string;
-    if ((grade === 'A+' || grade === 'A') && entrySignal === 'ENTER_NOW' && !trapAgainst) {
-      plainAction = 'BUY NOW';
-      plainMessage = `Buy ${/^[AEIOU]/.test(opp.symbol) ? 'an' : 'a'} ${opp.symbol} ${opt}. ${who} to push it ${dirWord}, and there is ${roomWord}. ${grade === 'A+' ? 'Very high' : 'High'} confidence — after you buy, the engine tells you exactly when to exit.`;
-    } else if (entrySignal === 'ENTER_NOW') {
-      plainAction = 'CONSIDER';
-      plainMessage = `A ${opp.symbol} ${opt} is ready, but only moderate confidence (grade ${grade}). Take a smaller position, or wait for a clearer one.`;
-    } else if (entrySignal === 'WAIT') {
-      plainAction = 'WAIT';
-      const why = control && !control.readable
-        ? `the big-money option activity hasn't shown up yet this morning — the engine won't guess. Give it ~15 more minutes`
-        : room.score < 45 ? `it has already moved a lot — wait for a small ${direction === 'CE' ? 'dip' : 'bounce'} before buying`
-        : `it is still forming — wait for it to confirm`;
-      plainMessage = `Don't buy yet. This ${opt} looks promising but ${why}.`;
-    } else {
-      plainAction = 'SKIP';
-      const why = trapAgainst ? `the option activity is going the OTHER way (trap risk)`
-        : newsAgainst ? `the news is pushing the stock the OTHER way`
-        : `the setup isn't clean`;
-      plainMessage = `Skip this one — ${why}. There will be better opportunities.`;
-    }
-
     const pick: ConvictionPick = {
       symbol: opp.symbol, sector: opp.sector ?? '', direction, rank: 0,
       technicalScore: Math.round(opp.technicalScore ?? 0),
@@ -758,13 +795,13 @@ export function runConvictionEngine(
       controlDataQuality: control?.dataQuality, controlReadable: control?.readable,
       trap: trapAgainst, trapNote: trapAgainst ? control?.trapNote : undefined,
       grade, gradeScore, gradeReasons, earlyFlow: earlyMover,
-      plainAction, plainMessage,
       primeScore, isPrime: false, whyBest: '',
       stability: stability.class, stabilityScore: Math.round(stability.score), trendScore: Math.round(stability.trend), consecutiveTop10: stability.consecutiveTop,
       newsMomentum: news.direction, newsBoost: news.boost, newsHeadlines: news.headlines, hasEarningsNews: news.hasEarnings,
       entrySignal, entrySignalReason, entryZoneLow: zone.low, entryZoneHigh: zone.high, currentPrice: price, stopLoss: zone.stopLoss, riskRewardRatio: zone.riskReward,
       locked: false, lockExpiresAt: null, lockMinutesLeft: 0, isNewsShock: false,
     };
+    applyPlainGuidance(pick);
     scored.set(opp.symbol, pick);
     lastPick.set(opp.symbol, pick);
   }
